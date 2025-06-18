@@ -1008,7 +1008,7 @@ with st.expander("Come interpretare questi indicatori", expanded=False):
     """)
 # === SEZIONE ANALISI NEWS ===
 if perplexity_api_key and perplexity_api_key != "YOUR_PERPLEXITY_API_KEY_HERE":
-    st.header('Analisi degli ultimi Risultati Finanziari tramite IA')
+    st.header('Analisi delle News e degli ultimi Risultati Finanziari tramite IA')
 
     with st.expander("Clicca per vedere gli ultimi risultati", expanded=False):
         with st.spinner("Analizzando le notizie di mercato con IA..."):
