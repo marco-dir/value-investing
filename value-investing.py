@@ -16,7 +16,38 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# === CONFIGURAZIONE API (INSERISCI LE TUE CHIAVI QUI) ===
+# CSS per rimuovere TUTTI i link anchor da tutti i titoli
+hide_all_anchor_links = """
+    <style>
+    /* Nasconde tutti i link anchor su tutti i livelli di titolo */
+    h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    
+    /* Nasconde gli elementi anchor di Streamlit */
+    .css-10trblm, .css-16idsys, .css-1dp5vir {
+        display: none !important;
+    }
+    
+    /* Metodo universale per tutte le versioni di Streamlit */
+    [data-testid="stMarkdownContainer"] a[href^="#"] {
+        display: none !important;
+    }
+    
+    /* Nasconde specificamente i viewer badge */
+    .viewerBadge_container__1QSob,
+    .viewerBadge_link__1S137,
+    .styles_viewerBadge__1yB5_,
+    [class*="viewerBadge"] {
+        display: none !important;
+    }
+    </style>
+"""
+
+st.markdown(hide_all_anchor_links, unsafe_allow_html=True)
+
+# === CONFIGURAZIONE API 
 FMP_API_KEY = os.getenv("MY_DATASET_API_KEY")
 PERPLEXITY_API_KEY = os.getenv("MY_SONAR_API_KEY")
 
