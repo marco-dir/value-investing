@@ -79,6 +79,32 @@ def fetch_stock_info_yahoo(symbol):
         st.error(f"Errore nel recupero delle informazioni sul titolo da Yahoo Finance: {str(e)}")
         return {}
 
+# Funzione per ottenere il simbolo della valuta
+def get_currency_symbol(currency_code):
+    """Restituisce il simbolo della valuta dal codice"""
+    currency_symbols = {
+        'USD': '$',
+        'EUR': '€',
+        'GBP': '£',
+        'JPY': '¥',
+        'CHF': 'CHF',
+        'CAD': 'C$',
+        'AUD': 'A$',
+        'CNY': '¥',
+        'HKD': 'HK$',
+        'SEK': 'kr',
+        'NOK': 'kr',
+        'DKK': 'kr',
+        'INR': '₹',
+        'BRL': 'R$',
+        'RUB': '₽',
+        'KRW': '₩',
+        'MXN': '$',
+        'SGD': 'S$',
+        'NZD': 'NZ$',
+        'ZAR': 'R'
+    }
+    return currency_symbols.get(currency_code, currency_code)
 # Funzioni per recuperare dati da FMP (Financial Modeling Prep)
 
 @st.cache_data
@@ -315,8 +341,7 @@ def calculate_cash_flow_per_share(df_cashflow, shares_outstanding):
         return 'Cash Flow per Share', 'Free Cash Flow Calcolato'
         
     return None, None
-
-def calculate_dcf_value(info, annual_financials, annual_cashflow, annual_balance_sheet):
+def calculate_dcf_value(info, annual_financials, annual_cashflow, annual_balance_sheet, currency_symbol):
     """Calcolo valore intrinseco con metodo DCF"""
     try:
         discount_rate = st.slider("Tasso di Sconto (%)", min_value=5.0, max_value=20.0, value=10.0, step=0.5) / 100
@@ -431,13 +456,13 @@ def calculate_dcf_value(info, annual_financials, annual_cashflow, annual_balance
             
             st.metric(
                 label="Valore Intrinseco per Azione (DCF)",
-                value=f"${intrinsic_value_per_share:.2f}",
+                value=f"{currency_symbol}{intrinsic_value_per_share:.2f}",
                 delta=f"{(intrinsic_value_per_share / current_price - 1) * 100:.1f}% vs prezzo attuale" if current_price > 0 else "N/A"
             )
             
             st.info(f"""
             **Parametri utilizzati:**
-            - Free Cash Flow: ${fcf/1000000:.2f}M
+            - Free Cash Flow: {currency_symbol}{fcf/1000000:.2f}M
             - Tasso di crescita iniziale: {growth_rate_initial*100:.1f}%
             - Tasso di crescita terminale: {growth_rate_terminal*100:.1f}%
             - Tasso di sconto: {discount_rate*100:.1f}%
@@ -455,7 +480,7 @@ def calculate_dcf_value(info, annual_financials, annual_cashflow, annual_balance
         st.error(traceback.format_exc())
         return None
 
-def calculate_graham_value(info, annual_financials, earnings_growth=None):
+def calculate_graham_value(info, annual_financials, currency_symbol, earnings_growth=None):
     """Calcolo valore intrinseco con Formula di Graham"""
     try:
         eps = (info.get('trailingEPS') or 
@@ -511,7 +536,7 @@ def calculate_graham_value(info, annual_financials, earnings_growth=None):
         
         st.metric(
             label="Valore Intrinseco per Azione (Graham)",
-            value=f"${intrinsic_value:.2f}",
+            value=f"{currency_symbol}{intrinsic_value:.2f}",
             delta=f"{(intrinsic_value / current_price - 1) * 100:.1f}% vs prezzo attuale" if current_price > 0 else "N/A"
         )
         
@@ -523,7 +548,7 @@ def calculate_graham_value(info, annual_financials, earnings_growth=None):
         - Tasso di crescita (g): {growth_rate:.1f}%
         - Rendimento Bond AAA (Y): {bond_yield:.1f}%
         
-        **Calcolo:** ${eps:.2f} × ({8.5 + (2 * growth_rate / 100):.2f}) × ({4.4 / bond_yield:.2f}) = ${intrinsic_value:.2f}
+        **Calcolo:** {currency_symbol}{eps:.2f} × ({8.5 + (2 * growth_rate / 100):.2f}) × ({4.4 / bond_yield:.2f}) = {currency_symbol}{intrinsic_value:.2f}
         """)
         
         return intrinsic_value
@@ -549,7 +574,7 @@ def should_be_green(value, condition_type):
     
     try:
         if isinstance(value, str):
-            numeric_value = float(value.replace('%', '').replace(',', '').replace('$', ''))
+            numeric_value = float(value.replace('%', '').replace(',', '').replace('$', '').replace('€', '').replace('£', '').replace('¥', ''))
             is_percentage_string = '%' in value
         else:
             numeric_value = float(value)
@@ -613,7 +638,6 @@ def format_indicator_value(value, condition_type):
         is_green = should_be_green(formatted_value, condition_type)
     
     return formatted_value, is_green
-
 # ========== APPLICAZIONE PRINCIPALE ==========
 
 st.title('Analisi Fondamentale Azioni')
@@ -647,6 +671,10 @@ if not information:
     st.error(f"❌ Nessuna informazione trovata per il ticker {symbol}. Verifica che il ticker sia corretto.")
     st.stop()
 
+# Ottieni la valuta del titolo
+currency_code = information.get('currency', 'USD')
+currency_symbol = get_currency_symbol(currency_code)
+
 # Recupera metriche aggiuntive da FMP
 additional_metrics = {}
 company_profile = {}
@@ -665,9 +693,10 @@ with col_info:
     percent_change = information.get("regularMarketChangePercent", 0)
     
     st.subheader(f'{company_name}')
+    st.caption(f"Valuta: {currency_code} ({currency_symbol})")
     st.metric(
         label="Prezzo Attuale",
-        value=f"{current_price:.2f}",
+        value=f"{currency_symbol}{current_price:.2f}",
         delta=f"{'+' if percent_change >= 0 else ''}{percent_change:.2f}%"
     )
 
@@ -675,7 +704,7 @@ with col_info:
     if market_cap:
         st.metric(
             label="Capitalizzazione",
-            value=f"{market_cap/1000000000:.1f}B"
+            value=f"{currency_symbol}{market_cap/1000000000:.1f}B"
         )
 
     sector = information.get("sector", company_profile.get("sector", "N/A"))
@@ -720,7 +749,7 @@ with col_chart:
         candle_stick_chart.update_layout(
             height=500,
             xaxis_title="Data",
-            yaxis_title="Prezzo ($/€)",
+            yaxis_title=f"Prezzo ({currency_symbol})",
             xaxis_rangeslider_visible=False,
             showlegend=False
         )
@@ -729,7 +758,7 @@ with col_chart:
         
         st.caption('Visualizza Analisi Tecnica Avanzata tramite IA [qui](https://diramco.com/analisi-tecnica-ai/)')
     else:
-        st.warning("⚠️ Dati dei prezzi storici nondisponibili.")
+        st.warning("⚠️ Dati dei prezzi storici non disponibili.")
 
 # === SEZIONE INDICATORI FINANZIARI DETTAGLIATI ===
 st.header('Indicatori Finanziari Dettagliati')
@@ -786,7 +815,7 @@ with col_table1:
     st.subheader("Indicatori di Prezzo")
     
     indicators_price = [
-        ("P/E Ratio", pe_value, pe_is_green, "Prezzo/Utili - Quanto si paga per 1$ di utili"),
+        ("P/E Ratio", pe_value, pe_is_green, "Prezzo/Utili - Quanto si paga per 1 unità di utili"),
         ("P/B Ratio", pb_value, pb_is_green, "Prezzo/Valore Contabile - Rapporto con patrimonio netto"),
         ("P/S Ratio", ps_value, ps_is_green, "Prezzo/Ricavi - Valutazione basata sui ricavi"),
         ("PEG Ratio", peg_value, peg_is_green, "P/E aggiustato per crescita - Ideale tra 0.5-2.0")
@@ -923,8 +952,7 @@ if PERPLEXITY_API_KEY and PERPLEXITY_API_KEY != "YOUR_PERPLEXITY_API_KEY_HERE":
         st.info("Analisi generata tramite IA basata sulle informazioni di mercato più recenti.")
 else:
     st.info("Configura la chiave API Perplexity nel codice per abilitare l'analisi delle notizie con IA.")
-
-# === SEZIONE DATI FINANZIARI ===
+    # === SEZIONE DATI FINANZIARI ===
 st.header('Dati Finanziari Storici')
 
 if not FMP_API_KEY or FMP_API_KEY == "YOUR_FMP_API_KEY_HERE":
@@ -976,7 +1004,7 @@ else:
                     x='Anno' if period == 'annual' else 'Quarter', 
                     y='revenue',
                     title="Ricavi Totali",
-                    labels={"revenue": "Ricavi ($/€)", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
+                    labels={"revenue": f"Ricavi ({currency_symbol})", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
                     color_discrete_sequence=['#1f77b4']
                 )
                 fig_revenue.update_layout(height=350)
@@ -991,7 +1019,7 @@ else:
                     x='Anno' if period == 'annual' else 'Quarter', 
                     y=eps_field,
                     title="Utile per Azione (EPS)",
-                    labels={eps_field: "EPS ($/€)", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
+                    labels={eps_field: f"EPS ({currency_symbol})", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
                     color_discrete_sequence=['#ff7f0e']
                 )
                 fig_eps.update_layout(height=350)
@@ -1034,7 +1062,7 @@ else:
                         x='Anno', 
                         y=dividend_field,
                         title="Dividendi Annuali per Azione",
-                        labels={dividend_field: "Dividendo ($/€)", 'Anno': "Anno"},
+                        labels={dividend_field: f"Dividendo ({currency_symbol})", 'Anno': "Anno"},
                         color_discrete_sequence=['#e377c2']
                     )
                 else:
@@ -1047,7 +1075,7 @@ else:
                         x='Quarter', 
                         y=dividend_field,
                         title="Dividendi Trimestrali per Azione",
-                        labels={dividend_field: "Dividendo ($/€)", 'Quarter': "Trimestre"},
+                        labels={dividend_field: f"Dividendo ({currency_symbol})", 'Quarter': "Trimestre"},
                         color_discrete_sequence=['#e377c2']
                     )
                 
@@ -1099,7 +1127,7 @@ else:
                                 x=x_col, 
                                 y='Dividendo per Azione',
                                 title="Dividendi per Azione",
-                                labels={"Dividendo per Azione": "Dividendo ($/€)", x_col: "Periodo"},
+                                labels={"Dividendo per Azione": f"Dividendo ({currency_symbol})", x_col: "Periodo"},
                                 color_discrete_sequence=['#e377c2']
                             )
                             fig_dividends.update_layout(height=350)
@@ -1206,8 +1234,7 @@ else:
                     )
                     fig_gross_margin.update_layout(height=350)
                     st.plotly_chart(fig_gross_margin, use_container_width=True)
-
-    # === GRAFICI BILANCIO ===
+                    # === GRAFICI BILANCIO ===
     if not balance_sheets.empty:
         st.subheader("Analisi Stato Patrimoniale")
         
@@ -1246,7 +1273,7 @@ else:
                         x='Anno' if period == 'annual' else 'Quarter', 
                         y='Book Value per Share',
                         title="Book Value per Share",
-                        labels={"Book Value per Share": "Book Value per Share ($/€)", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
+                        labels={"Book Value per Share": f"Book Value per Share ({currency_symbol})", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
                         color_discrete_sequence=['#17becf']
                     )
                     fig_bvps.update_layout(height=350)
@@ -1316,7 +1343,7 @@ else:
                     x='Anno' if period == 'annual' else 'Quarter', 
                     y=ocf_field,
                     title="Cash Flow Operativo",
-                    labels={ocf_field: "Cash Flow Operativo ($/€)", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
+                    labels={ocf_field: f"Cash Flow Operativo ({currency_symbol})", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
                     color_discrete_sequence=['#2ca02c']
                 )
                 fig_ocf.update_layout(height=350)
@@ -1331,7 +1358,7 @@ else:
                     x='Anno' if period == 'annual' else 'Quarter', 
                     y=icf_field,
                     title="Cash Flow da Investimenti",
-                    labels={icf_field: "Cash Flow da Investimenti ($/€)", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
+                    labels={icf_field: f"Cash Flow da Investimenti ({currency_symbol})", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
                     color_discrete_sequence=['#d62728']
                 )
                 fig_icf.update_layout(height=350)
@@ -1365,7 +1392,7 @@ else:
                         x='Anno' if period == 'annual' else 'Quarter', 
                         y='Cash Flow per Share',
                         title=f"{title}<br><sub>{subtitle}</sub>",
-                        labels={"Cash Flow per Share": "Cash Flow per Share ($/€)", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
+                        labels={"Cash Flow per Share": f"Cash Flow per Share ({currency_symbol})", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
                         color_discrete_sequence=['#9467bd']
                     )
                     fig_cfps.update_layout(height=350)
@@ -1380,13 +1407,12 @@ else:
                     x='Anno' if period == 'annual' else 'Quarter', 
                     y=fcf_financing_field,
                     title="Cash Flow da Finanziamenti",
-                    labels={fcf_financing_field: "Cash Flow da Finanziamenti ($/€)", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
+                    labels={fcf_financing_field: f"Cash Flow da Finanziamenti ({currency_symbol})", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
                     color_discrete_sequence=['#ff7f0e']
                 )
                 fig_fcf_financing.update_layout(height=350)
                 st.plotly_chart(fig_fcf_financing, use_container_width=True)
-
-    # === GRAFICI MULTIPLI DI VALUTAZIONE ===
+                # === GRAFICI MULTIPLI DI VALUTAZIONE ===
     if not income_statements.empty and not balance_sheets.empty:
         st.subheader("Indicatori di Prezzo Storici")
         
@@ -1440,7 +1466,7 @@ else:
                     if book_value_yahoo:
                         latest_book_value = book_value_yahoo
                 
-                st.info(f"🔍 Dati utilizzati: EPS = {latest_eps:.2f}, Book Value = {latest_book_value:.2f}" if latest_eps and latest_book_value else "⚠️ Alcuni dati finanziari mancanti")
+                st.info(f"🔍 Dati utilizzati: EPS = {currency_symbol}{latest_eps:.2f}, Book Value = {currency_symbol}{latest_book_value:.2f}" if latest_eps and latest_book_value else "⚠️ Alcuni dati finanziari mancanti")
                 
                 for date, row in hist_10y.iterrows():
                     close_price = row['Close']
@@ -1624,8 +1650,7 @@ else:
         except Exception as e:
             st.error(f"Errore nel recupero dei dati storici: {str(e)}")
             st.info("Impossibile calcolare i multipli di valutazione storici")
-
-# === SEZIONE CALCOLO VALORE INTRINSECO ===
+            # === SEZIONE CALCOLO VALORE INTRINSECO ===
 st.header('Calcolo Valore Intrinseco')
 
 if not FMP_API_KEY or FMP_API_KEY == "YOUR_FMP_API_KEY_HERE":
@@ -1683,7 +1708,7 @@ else:
                 - **Tasso di crescita**: crescita attesa dei flussi futuri
                 """)
             
-            intrinsic_value_dcf = calculate_dcf_value(information, annual_income, annual_cashflow, annual_balance)
+            intrinsic_value_dcf = calculate_dcf_value(information, annual_income, annual_cashflow, annual_balance, currency_symbol)
             
         with tab2:
             st.subheader("Formula di Benjamin Graham")
@@ -1701,7 +1726,7 @@ else:
                 - **8.5**: P/E di base per un'azienda senza crescita
                 """)
             
-            intrinsic_value_graham = calculate_graham_value(information, annual_income, earnings_growth)
+            intrinsic_value_graham = calculate_graham_value(information, annual_income, currency_symbol, earnings_growth)
 
 # Footer
 st.markdown("---")
