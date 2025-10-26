@@ -51,8 +51,7 @@ st.markdown(hide_all_anchor_links, unsafe_allow_html=True)
 FMP_API_KEY = os.getenv("MY_DATASET_API_KEY")
 PERPLEXITY_API_KEY = os.getenv("MY_SONAR_API_KEY")
 
-# Funzioni per recuperare dati da Yahoo Finance
-
+# Funzioni per recuperare i dati
 @st.cache_data
 def fetch_stock_info_yahoo(symbol):
     """Recupera informazioni di base sul titolo da Yahoo Finance"""
@@ -626,6 +625,14 @@ def format_indicator_value(value, condition_type):
         else:
             formatted_value = "N/A"
             is_green = False
+    elif condition_type == "debt_equity":
+        if value is not None and value != 0:
+            # Mostra Debt/Equity come percentuale
+            formatted_value = f"{value * 100:.2f}%"
+            is_green = should_be_green(value, condition_type)
+        else:
+            formatted_value = "N/A"
+            is_green = False
     elif condition_type in ["operating_margin", "profit_margin", "gross_margin"]:
         if value is not None and value != 0:
             formatted_value = f"{value * 100:.2f}%"
@@ -678,9 +685,12 @@ currency_symbol = get_currency_symbol(currency_code)
 # Recupera metriche aggiuntive da FMP
 additional_metrics = {}
 company_profile = {}
+income_statements_preview = pd.DataFrame()  # Per calcolare i margini corretti
 if FMP_API_KEY and FMP_API_KEY != "YOUR_FMP_API_KEY_HERE":
     additional_metrics = fetch_financial_metrics_fmp(symbol, FMP_API_KEY)
     company_profile = fetch_company_profile_fmp(symbol, FMP_API_KEY)
+    # Carica i dati del conto economico per calcolare i margini reali
+    income_statements_preview = fetch_income_statements_fmp(symbol, FMP_API_KEY, period='annual', limit=1)
 
 # === SEZIONE INFORMAZIONI TITOLO E GRAFICO ===
 st.header('Panoramica Titolo')
@@ -763,50 +773,127 @@ with col_chart:
 # === SEZIONE INDICATORI FINANZIARI DETTAGLIATI ===
 st.header('Indicatori Finanziari Dettagliati')
 
-# Calcola PEG Ratio
+# Recupera dati da FMP prioritariamente
+pe_ratio = additional_metrics.get("peRatio")
+if not pe_ratio:
+    pe_ratio = information.get("trailingPE", 0)
+
+pb_ratio = additional_metrics.get("pbRatio")
+if not pb_ratio:
+    pb_ratio = information.get("priceToBook", 0)
+
+price_to_sales = additional_metrics.get("priceToSalesRatio")
+if not price_to_sales:
+    price_to_sales = information.get("priceToSalesTrailing12Months", 0)
+
+# Calcola PEG Ratio da FMP
 peg_ratio = None
-pe_ratio = information.get("trailingPE", additional_metrics.get("peRatio", 0))
-eps_growth = information.get("earningsGrowth", 0)
-
-if pe_ratio and eps_growth and eps_growth > 0:
+earnings_quarterly_growth = additional_metrics.get("earningsYield")
+if pe_ratio and earnings_quarterly_growth and earnings_quarterly_growth > 0:
+    # Converti earnings yield in growth rate se necessario
+    eps_growth = earnings_quarterly_growth
+    if eps_growth > 1:
+        eps_growth = eps_growth / 100
     peg_ratio = pe_ratio / (eps_growth * 100)
+else:
+    # Fallback a Yahoo Finance
+    eps_growth = information.get("earningsGrowth", 0)
+    if pe_ratio and eps_growth and eps_growth > 0:
+        peg_ratio = pe_ratio / (eps_growth * 100)
 
-# Calcola ROIC
-roic = None
-if additional_metrics:
-    roic = additional_metrics.get('roic')
-    if roic and roic > 1:
-        roic = roic / 100
+# ROE, ROA, ROIC da FMP
+roe = additional_metrics.get("roe")
+if roe and roe > 1:
+    roe = roe / 100
+if not roe:
+    roe = information.get("returnOnEquity", 0)
 
-if roic is None:
-    roa = information.get("returnOnAssets", additional_metrics.get("returnOnAssets", 0))
-    if roa:
-        roic = roa
-        if roic > 1:
-            roic = roic / 100
+roa = additional_metrics.get("returnOnAssets")
+if roa and roa > 1:
+    roa = roa / 100
+if not roa:
+    roa = information.get("returnOnAssets", 0)
 
-# Altri indicatori
-price_to_sales = information.get("priceToSalesTrailing12Months", additional_metrics.get("priceToSalesRatio", 0))
-quick_ratio = information.get("quickRatio", 0)
-current_ratio = information.get("currentRatio", additional_metrics.get("currentRatio", 0))
-operating_margin = information.get("operatingMargins", 0)
-profit_margin = information.get("profitMargins", additional_metrics.get("netProfitMargin", 0))
-gross_margins = information.get("grossMargins", additional_metrics.get("grossProfitMargin", 0))
+roic = additional_metrics.get('roic')
+if roic and roic > 1:
+    roic = roic / 100
+if not roic:
+    roic = roa  # Fallback a ROA
+
+# Debt to Equity da FMP
+debt_equity_ratio = additional_metrics.get("debtToEquity")
+if debt_equity_ratio and debt_equity_ratio > 100:
+    debt_equity_ratio = debt_equity_ratio / 100
+if not debt_equity_ratio:
+    debt_equity_ratio = information.get("debtToEquity", 0)
+    if debt_equity_ratio and debt_equity_ratio > 100:
+        debt_equity_ratio = debt_equity_ratio / 100
+
+# Margini da FMP - Calcoliamo direttamente dai dati del conto economico per coerenza con i grafici
+gross_margins = None
+operating_margin = None
+profit_margin = None
+
+if not income_statements_preview.empty:
+    latest_income = income_statements_preview.iloc[0]
+    
+    # Calcola Margine Lordo come fa il grafico
+    if 'revenue' in latest_income and 'costOfRevenue' in latest_income and latest_income['revenue'] > 0:
+        gross_margins = (latest_income['revenue'] - latest_income['costOfRevenue']) / latest_income['revenue']
+    elif 'grossProfit' in latest_income and 'revenue' in latest_income and latest_income['revenue'] > 0:
+        gross_margins = latest_income['grossProfit'] / latest_income['revenue']
+    
+    # Calcola Margine Operativo
+    if 'operatingIncome' in latest_income and 'revenue' in latest_income and latest_income['revenue'] > 0:
+        operating_margin = latest_income['operatingIncome'] / latest_income['revenue']
+    
+    # Calcola Margine Netto
+    if 'netIncome' in latest_income and 'revenue' in latest_income and latest_income['revenue'] > 0:
+        profit_margin = latest_income['netIncome'] / latest_income['revenue']
+
+# Fallback a dati aggregati se non disponibili dal conto economico
+if gross_margins is None:
+    gross_margins = additional_metrics.get("grossProfitMargin")
+    if gross_margins and gross_margins > 1:
+        gross_margins = gross_margins / 100
+    if gross_margins is None:
+        gross_margins = information.get("grossMargins", 0)
+
+if operating_margin is None:
+    operating_margin = additional_metrics.get("operatingProfitMargin")
+    if operating_margin and operating_margin > 1:
+        operating_margin = operating_margin / 100
+    if operating_margin is None:
+        operating_margin = information.get("operatingMargins", 0)
+
+if profit_margin is None:
+    profit_margin = additional_metrics.get("netProfitMargin")
+    if profit_margin and profit_margin > 1:
+        profit_margin = profit_margin / 100
+    if profit_margin is None:
+        profit_margin = information.get("profitMargins", 0)
+
+# Liquidità da FMP
+current_ratio = additional_metrics.get("currentRatio")
+if not current_ratio:
+    current_ratio = information.get("currentRatio", 0)
+
+quick_ratio = information.get("quickRatio", 0)  # Non sempre disponibile in FMP
+
+# Beta da profilo aziendale FMP
+beta = company_profile.get("beta")
+if not beta:
+    beta = information.get("beta", 0)
 
 # Formattazione valori
 pe_value, pe_is_green = format_indicator_value(pe_ratio, "pe")
-pb_value, pb_is_green = format_indicator_value(information.get("priceToBook", additional_metrics.get("pbRatio", 0)), "pb")
+pb_value, pb_is_green = format_indicator_value(pb_ratio, "pb")
 peg_value, peg_is_green = format_indicator_value(peg_ratio, "peg") if peg_ratio else ("N/A", False)
 ps_value, ps_is_green = format_indicator_value(price_to_sales, "ps")
-
-debt_equity_ratio = information.get("debtToEquity", additional_metrics.get("debtToEquity", 0))
-if debt_equity_ratio > 100:
-    debt_equity_ratio = debt_equity_ratio / 100
 debt_eq_value, debt_eq_is_green = format_indicator_value(debt_equity_ratio, "debt_equity")
-
 roic_value, roic_is_green = format_indicator_value(roic, "roic")
-roe_value, roe_is_green = format_indicator_value(information.get("returnOnEquity", additional_metrics.get("returnOnEquity", 0)), "roe")
-roa_value, roa_is_green = format_indicator_value(information.get("returnOnAssets", additional_metrics.get("returnOnAssets", 0)), "roa")
+roe_value, roe_is_green = format_indicator_value(roe, "roe")
+roa_value, roa_is_green = format_indicator_value(roa, "roa")
 
 # Layout tabelle
 col_table1, col_table2 = st.columns(2)
@@ -864,14 +951,6 @@ col_margin1, col_margin2 = st.columns(2)
 
 with col_margin1:
     st.write("**Margini di Redditività**")
-    
-    # Converti margini da FMP se necessario
-    if gross_margins and gross_margins > 1:
-        gross_margins = gross_margins / 100
-    if operating_margin and operating_margin > 1:
-        operating_margin = operating_margin / 100
-    if profit_margin and profit_margin > 1:
-        profit_margin = profit_margin / 100
     
     margin_indicators = [
         ("Margine Lordo", gross_margins, "Ricavi - Costi diretti / Ricavi"),
@@ -931,7 +1010,7 @@ with st.expander("Come interpretare questi indicatori", expanded=False):
     - **ROE > 15%**: Ottima redditività del capitale ✅
     - **ROA > 10%**: Efficiente utilizzo degli asset ✅
     - **ROIC > 10%**: Buon ritorno sul capitale investito ✅
-    - **Debt/Equity < 1**: Leva finanziaria controllata ✅
+    - **Debt/Equity < 100%**: Leva finanziaria controllata ✅
     
     ### Margini e Liquidità
     - **Margini > 10%**: Buona redditività operativa ✅
@@ -1730,4 +1809,4 @@ else:
 
 # Footer
 st.markdown("---")
-st.caption("Dati forniti da Yahoo Finance e Financial Modeling Prep (FMP)")
+st.caption("Sviluppato da DIRAMCO")
