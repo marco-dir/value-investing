@@ -55,46 +55,7 @@ PERPLEXITY_API_KEY = os.getenv("MY_SONAR_API_KEY")
 GOOGLE_SHEET_ID = os.getenv("MY_GOOGLES_ID")
 GOOGLE_SHEET_GID = os.getenv("MY_GOOGLES_GID")
 
-# Funzione per cercare il ticker nel Google Sheet
-@st.cache_data(ttl=3600)  # Cache per 1 ora
-def search_ticker_score(ticker):
-    """Cerca il ticker nel Google Sheet e restituisce il punteggio dalla colonna G"""
-    try:
-        # URL per scaricare il Google Sheet come CSV
-        csv_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/export?format=csv&gid={GOOGLE_SHEET_GID}"
-        
-        # Scarica il CSV
-        df = pd.read_csv(csv_url)
-        
-        # Verifica che le colonne esistano (C=Ticker, G=Score)
-        # Le colonne sono indicizzate da 0, quindi C=2, G=6
-        if len(df.columns) < 7:
-            return None
-        
-        # Cerca il ticker nella colonna C (indice 2)
-        ticker_column = df.columns[2]
-        score_column = df.columns[6]
-        
-        # Normalizza il ticker per la ricerca (maiuscolo)
-        ticker_upper = ticker.upper()
-        
-        # Cerca il ticker
-        match = df[df[ticker_column].str.upper() == ticker_upper]
-        
-        if not match.empty:
-            score = match[score_column].iloc[0]
-            try:
-                return float(score)
-            except (ValueError, TypeError):
-                return None
-        
-        return None
-        
-    except Exception as e:
-        st.warning(f"Impossibile recuperare dati dal Google Sheet: {str(e)}")
-        return None
-
-# Funzioni per recuperare i dati
+# Funzioni per recuperare dati da Yahoo Finance
 @st.cache_data
 def fetch_stock_info_yahoo(symbol):
     """Recupera informazioni di base sul titolo da Yahoo Finance"""
@@ -147,7 +108,6 @@ def get_currency_symbol(currency_code):
         'ZAR': 'R'
     }
     return currency_symbols.get(currency_code, currency_code)
-
 # Funzioni per recuperare dati da FMP (Financial Modeling Prep)
 
 @st.cache_data
@@ -183,16 +143,7 @@ def fetch_price_history_yahoo(symbol):
     """Recupera lo storico dei prezzi da Yahoo Finance"""
     try:
         stock = yf.Ticker(symbol)
-        # Usa period invece di start/end per maggiore affidabilità
-        hist = stock.history(period='1y', interval='1d')  # Cambiato da '1wk' a '1d'
-        
-        if hist.empty:
-            # Fallback: prova con un approccio diverso
-            from datetime import datetime, timedelta
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=365)
-            hist = stock.history(start=start_date, end=end_date)
-        
+        hist = stock.history(period='1y', interval='1wk')
         return hist
     except Exception as e:
         st.error(f"Errore nel recupero dello storico dei prezzi: {str(e)}")
@@ -393,7 +344,6 @@ def calculate_cash_flow_per_share(df_cashflow, shares_outstanding):
         return 'Cash Flow per Share', 'Free Cash Flow Calcolato'
         
     return None, None
-
 def calculate_dcf_value(info, annual_financials, annual_cashflow, annual_balance_sheet, currency_symbol):
     """Calcolo valore intrinseco con metodo DCF"""
     try:
@@ -699,7 +649,6 @@ def format_indicator_value(value, condition_type):
         is_green = should_be_green(formatted_value, condition_type)
     
     return formatted_value, is_green
-
 # ========== APPLICAZIONE PRINCIPALE ==========
 
 st.title('Analisi Fondamentale Azioni')
@@ -777,33 +726,6 @@ with col_info:
 
     st.subheader("Indicatori Chiave")
     
-    # RICERCA SCORE NEL GOOGLE SHEET
-    ticker_score = search_ticker_score(symbol)
-    
-    if ticker_score is not None:
-        # Determina il colore in base allo score
-        if ticker_score >= 9:
-            score_color = "#00b300"  # Verde molto scuro
-            score_emoji = "🟢🟢"
-        elif ticker_score >= 8:
-            score_color = "#00e600"  # Verde
-            score_emoji = "🟢"
-        elif ticker_score >= 6:
-            score_color = "#ffd700"  # Giallo
-            score_emoji = "🟡"
-        else:
-            score_color = "#ff4444"  # Rosso
-            score_emoji = "🔴"
-        
-        st.markdown(f"""
-        <div style='padding: 15px; border-radius: 10px; background-color: {score_color}20; border: 2px solid {score_color}; margin-bottom: 15px;'>
-            <h3 style='margin: 0; color: {score_color};'>{score_emoji} Score DIRAMCO: {ticker_score:.1f}/10</h3>
-            <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Valutazione qualità fondamentale</p>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("ℹ️ **Score DIRAMCO:** Non disponibile al momento")
-    
     col_ind1, col_ind2 = st.columns(2)
     
     with col_ind1:
@@ -827,140 +749,26 @@ with col_chart:
     if not price_history.empty:
         st.subheader('Grafico 1 Anno')
         
-        try:
-            # Copia e pulisci i dati
-            price_history_clean = price_history.copy()
-            
-            # RIMUOVI TIMEZONE dall'indice
-            if isinstance(price_history_clean.index, pd.DatetimeIndex):
-                if price_history_clean.index.tz is not None:
-                    price_history_clean.index = price_history_clean.index.tz_localize(None)
-            
-            # Filtra solo l'ultimo anno
-            from datetime import datetime, timedelta
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=365)
-            
-            price_history_clean = price_history_clean[price_history_clean.index >= start_date]
-            
-            if price_history_clean.empty:
-                price_history_clean = price_history.copy()
-                if isinstance(price_history_clean.index, pd.DatetimeIndex) and price_history_clean.index.tz is not None:
-                    price_history_clean.index = price_history_clean.index.tz_localize(None)
-            
-            # Reset index e prepara dati
-            price_history_reset = price_history_clean.reset_index()
-            
-            # Assicurati che la prima colonna sia 'Date'
-            if price_history_reset.columns[0] != 'Date':
-                price_history_reset.rename(columns={price_history_reset.columns[0]: 'Date'}, inplace=True)
-            
-            # Converti Date a datetime senza timezone
-            price_history_reset['Date'] = pd.to_datetime(price_history_reset['Date'])
-            if hasattr(price_history_reset['Date'].dtype, 'tz') and price_history_reset['Date'].dt.tz is not None:
-                price_history_reset['Date'] = price_history_reset['Date'].dt.tz_localize(None)
-            
-            # Ordina per data crescente (importante!)
-            price_history_reset = price_history_reset.sort_values('Date')
-            
-            # Rimuovi NaN
-            price_history_reset = price_history_reset.dropna(subset=['Open', 'High', 'Low', 'Close'])
-            
-            # Debug
-            st.caption(f"📅 Dati dal {price_history_reset['Date'].min().strftime('%d/%m/%Y')} al {price_history_reset['Date'].max().strftime('%d/%m/%Y')} ({len(price_history_reset)} giorni)")
-            
-            if len(price_history_reset) < 2:
-                st.error("Dati insufficienti per creare il grafico")
-            else:
-                # Crea il grafico - METODO SEMPLIFICATO
-                fig = go.Figure()
-                
-                # Aggiungi candlestick con parametri espliciti
-                fig.add_trace(go.Candlestick(
-                    x=price_history_reset['Date'].tolist(),
-                    open=price_history_reset['Open'].tolist(),
-                    high=price_history_reset['High'].tolist(),
-                    low=price_history_reset['Low'].tolist(),
-                    close=price_history_reset['Close'].tolist(),
-                    name=symbol,
-                    increasing={'line': {'color': '#26a69a'}, 'fillcolor': '#26a69a'},
-                    decreasing={'line': {'color': '#ef5350'}, 'fillcolor': '#ef5350'}
-                ))
-                
-                # Layout semplificato
-                fig.update_layout(
-                    height=500,
-                    margin=dict(l=50, r=50, t=30, b=50),
-                    xaxis_title="Data",
-                    yaxis_title=f"Prezzo ({currency_symbol})",
-                    xaxis_rangeslider_visible=False,
-                    showlegend=False,
-                    hovermode='x unified',
-                    template='plotly_white'
-                )
-                
-                # Configurazione assi
-                fig.update_xaxes(
-                    type='date',
-                    tickformat='%b %Y',
-                    tickmode='auto',
-                    nticks=10
-                )
-                
-                fig.update_yaxes(
-                    tickprefix=currency_symbol,
-                    side='right'
-                )
-                
-                st.plotly_chart(fig, use_container_width=True, key='candlestick_chart')
-                
-                # Calcola YTD
-                current_year = datetime.now().year
-                ytd_data = price_history_reset[price_history_reset['Date'].dt.year == current_year]
-                
-                ytd_change_pct = None
-                if not ytd_data.empty and len(ytd_data) > 0:
-                    ytd_first_close = ytd_data['Close'].iloc[0]
-                    ytd_last_close = ytd_data['Close'].iloc[-1]
-                    ytd_change_pct = ((ytd_last_close - ytd_first_close) / ytd_first_close) * 100
-                
-                # Statistiche
-                col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
-                
-                with col_stat1:
-                    st.metric("Massimo 52W", f"{currency_symbol}{price_history_reset['High'].max():.2f}")
-                
-                with col_stat2:
-                    st.metric("Minimo 52W", f"{currency_symbol}{price_history_reset['Low'].min():.2f}")
-                
-                with col_stat3:
-                    if len(price_history_reset) > 1:
-                        first_close = price_history_reset['Close'].iloc[0]
-                        last_close = price_history_reset['Close'].iloc[-1]
-                        change_pct = ((last_close - first_close) / first_close) * 100
-                        st.metric("Variazione 1Y", f"{change_pct:+.2f}%", delta_color="normal")
-                
-                with col_stat4:
-                    if ytd_change_pct is not None:
-                        st.metric("Variazione YTD", f"{ytd_change_pct:+.2f}%", delta_color="normal")
-                    else:
-                        st.metric("Variazione YTD", "N/A")
-                
-                with col_stat5:
-                    if 'Volume' in price_history_reset.columns:
-                        avg_volume = price_history_reset['Volume'].mean()
-                        if avg_volume >= 1000000:
-                            st.metric("Volume medio", f"{avg_volume/1000000:.1f}M")
-                        elif avg_volume >= 1000:
-                            st.metric("Volume medio", f"{avg_volume/1000:.1f}K")
-                        else:
-                            st.metric("Volume medio", f"{avg_volume:.0f}")
-                
-        except Exception as e:
-            st.error(f"❌ Errore nella creazione del grafico: {str(e)}")
-            import traceback
-            with st.expander("🔍 Traceback completo"):
-                st.code(traceback.format_exc())
+        price_history_reset = price_history.rename_axis('Data').reset_index()
+        
+        candle_stick_chart = go.Figure(data=[go.Candlestick(
+            x=price_history_reset['Data'], 
+            open=price_history_reset['Open'], 
+            low=price_history_reset['Low'],
+            high=price_history_reset['High'],
+            close=price_history_reset['Close'],
+            name=symbol
+        )])
+        
+        candle_stick_chart.update_layout(
+            height=500,
+            xaxis_title="Data",
+            yaxis_title=f"Prezzo ({currency_symbol})",
+            xaxis_rangeslider_visible=False,
+            showlegend=False
+        )
+        
+        st.plotly_chart(candle_stick_chart, use_container_width=True)
         
         st.caption('Visualizza Analisi Tecnica Avanzata tramite IA [qui](https://diramco.com/analisi-tecnica-ai/)')
     else:
@@ -1213,12 +1021,6 @@ with st.expander("Come interpretare questi indicatori", expanded=False):
     - **Current Ratio > 1.5**: Buona liquidità a breve termine ✅
     - **Quick Ratio > 1.0**: Liquidità immediata sufficiente ✅
     - **Beta 0.5-1.5**: Volatilità in linea con il mercato ✅
-    
-    ### Score DIRAMCO
-    - **≥ 9**: Qualità eccellente 🟢🟢
-    - **≥ 8**: Qualità molto buona 🟢
-    - **≥ 6**: Qualità accettabile 🟡
-    - **< 6**: Cautela necessaria 🔴
     """)
 
 # === SEZIONE ANALISI NEWS ===
@@ -1234,7 +1036,7 @@ if PERPLEXITY_API_KEY and PERPLEXITY_API_KEY != "YOUR_PERPLEXITY_API_KEY_HERE":
 else:
     st.info("Configura la chiave API Perplexity nel codice per abilitare l'analisi delle notizie con IA.")
     
-# === SEZIONE DATI FINANZIARI ===---------------
+# === SEZIONE DATI FINANZIARI ===
 st.header('Dati Finanziari Storici')
 
 if not FMP_API_KEY or FMP_API_KEY == "YOUR_FMP_API_KEY_HERE":
