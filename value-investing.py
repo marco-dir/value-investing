@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import requests
 import datetime
+from datetime import timedelta
 import json
 import os
 
@@ -55,60 +56,76 @@ PERPLEXITY_API_KEY = os.getenv("MY_SONAR_API_KEY")
 GOOGLE_SHEET_ID = os.getenv("MY_GOOGLES_ID")
 GOOGLE_SHEET_GID = os.getenv("MY_GOOGLES_GID")
 
-# Funzioni per recuperare dati da Yahoo Finance
-@st.cache_data
-def fetch_stock_info_yahoo(symbol):
-    """Recupera informazioni di base sul titolo da Yahoo Finance"""
+# ===== FUNZIONI DI RECUPERO DATI =====
+@st.cache_data(ttl=3600)
+def search_ticker_score(ticker):
+    """Cerca il ticker nel Google Sheet e restituisce il punteggio dalla colonna G"""
     try:
-        stock = yf.Ticker(symbol)
-        info = stock.info
+        csv_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/export?format=csv&gid={GOOGLE_SHEET_GID}"
+        df = pd.read_csv(csv_url)
         
-        hist = stock.history(period='1d')
+        if len(df.columns) < 7:
+            return None
         
-        if not hist.empty:
-            current_price = hist['Close'].iloc[-1]
-            prev_close = info.get('previousClose', hist['Close'].iloc[-1])
-            
-            if prev_close and prev_close != 0:
-                percent_change = ((current_price - prev_close) / prev_close) * 100
-            else:
-                percent_change = 0
-                
-            info['currentPrice'] = current_price
-            info['regularMarketChangePercent'] = percent_change
+        ticker_column = df.columns[2]
+        score_column = df.columns[6]
+        ticker_upper = ticker.upper()
+        
+        match = df[df[ticker_column].str.upper() == ticker_upper]
+        
+        if not match.empty:
+            score = match[score_column].iloc[0]
+            try:
+                return float(score)
+            except (ValueError, TypeError):
+                return None
+        
+        return None
+        
+    except Exception as e:
+        st.warning(f"Impossibile recuperare dati dal Google Sheet: {str(e)}")
+        return None
+
+@st.cache_data(ttl=3600)
+def fetch_stock_info_fmp(symbol, api_key):
+    """Recupera informazioni dal profilo FMP + quote real-time"""
+    try:
+        profile_url = f"https://financialmodelingprep.com/api/v3/profile/{symbol}?apikey={api_key}"
+        profile_response = requests.get(profile_url)
+        profile_data = profile_response.json()[0] if profile_response.json() else {}
+        
+        quote_url = f"https://financialmodelingprep.com/api/v3/quote/{symbol}?apikey={api_key}"
+        quote_response = requests.get(quote_url)
+        quote_data = quote_response.json()[0] if quote_response.json() else {}
+        
+        info = {
+            'longName': profile_data.get('companyName'),
+            'symbol': symbol,
+            'currentPrice': quote_data.get('price'),
+            'regularMarketChangePercent': quote_data.get('changesPercentage'),
+            'marketCap': profile_data.get('mktCap'),
+            'sector': profile_data.get('sector'),
+            'industry': profile_data.get('industry'),
+            'currency': profile_data.get('currency', 'USD'),
+            'beta': profile_data.get('beta'),
+            'trailingPE': quote_data.get('pe'),
+            'priceToBook': quote_data.get('priceToBook'),
+        }
         
         return info
     except Exception as e:
-        st.error(f"Errore nel recupero delle informazioni sul titolo da Yahoo Finance: {str(e)}")
+        st.error(f"Errore FMP: {str(e)}")
         return {}
 
-# Funzione per ottenere il simbolo della valuta
 def get_currency_symbol(currency_code):
     """Restituisce il simbolo della valuta dal codice"""
     currency_symbols = {
-        'USD': '$',
-        'EUR': '€',
-        'GBP': '£',
-        'JPY': '¥',
-        'CHF': 'CHF',
-        'CAD': 'C$',
-        'AUD': 'A$',
-        'CNY': '¥',
-        'HKD': 'HK$',
-        'SEK': 'kr',
-        'NOK': 'kr',
-        'DKK': 'kr',
-        'INR': '₹',
-        'BRL': 'R$',
-        'RUB': '₽',
-        'KRW': '₩',
-        'MXN': '$',
-        'SGD': 'S$',
-        'NZD': 'NZ$',
-        'ZAR': 'R'
+        'USD': '$', 'EUR': '€', 'GBP': '£', 'JPY': '¥', 'CHF': 'CHF',
+        'CAD': 'C$', 'AUD': 'A$', 'CNY': '¥', 'HKD': 'HK$', 'SEK': 'kr',
+        'NOK': 'kr', 'DKK': 'kr', 'INR': '₹', 'BRL': 'R$', 'RUB': '₽',
+        'KRW': '₩', 'MXN': '$', 'SGD': 'S$', 'NZD': 'NZ$', 'ZAR': 'R'
     }
     return currency_symbols.get(currency_code, currency_code)
-# Funzioni per recuperare dati da FMP (Financial Modeling Prep)
 
 @st.cache_data
 def fetch_financial_metrics_fmp(symbol, api_key):
@@ -139,14 +156,48 @@ def fetch_company_profile_fmp(symbol, api_key):
         return {}
 
 @st.cache_data
-def fetch_price_history_yahoo(symbol):
-    """Recupera lo storico dei prezzi da Yahoo Finance"""
+def fetch_financial_ratios_fmp(symbol, api_key):
+    """Recupera i ratio finanziari da FMP incluso Quick Ratio e ROA"""
+    url = f"https://financialmodelingprep.com/api/v3/ratios/{symbol}?apikey={api_key}"
+    
     try:
-        stock = yf.Ticker(symbol)
-        hist = stock.history(period='1y', interval='1wk')
-        return hist
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        return data[0] if data else {}
     except Exception as e:
-        st.error(f"Errore nel recupero dello storico dei prezzi: {str(e)}")
+        st.warning(f"Impossibile recuperare i ratio finanziari da FMP: {str(e)}")
+        return {}
+
+@st.cache_data(ttl=3600)
+def fetch_price_history_fmp(symbol, api_key):
+    """Storico prezzi da FMP"""
+    url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{symbol}?apikey={api_key}"
+    
+    try:
+        response = requests.get(url)
+        data = response.json()
+        
+        if 'historical' in data:
+            df = pd.DataFrame(data['historical'])
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            df = df.sort_index(ascending=False).head(252)
+            df = df.sort_index()
+            
+            column_mapping = {
+                'open': 'Open',
+                'high': 'High',
+                'low': 'Low',
+                'close': 'Close',
+                'volume': 'Volume'
+            }
+            df = df.rename(columns=column_mapping)
+            
+            return df
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Errore: {str(e)}")
         return pd.DataFrame()
 
 @st.cache_data
@@ -285,282 +336,14 @@ Rispondi direttamente con l'analisi finale, senza introduzioni né commenti sul 
     except Exception as e:
         return f"Errore nell'analisi: {str(e)}"
 
+# ===== FUNZIONI UTILITÀ =====
+
 def get_balance_sheet_field(df, field_options):
     """Trova il primo campo disponibile da una lista di opzioni"""
     for field in field_options:
         if field in df.columns:
             return field
     return None
-
-def calculate_book_value_per_share(df_balance, shares_outstanding):
-    """Calcola Book Value per Azione"""
-    equity_field_options = [
-        'totalStockholdersEquity',
-        'totalEquity',
-        'shareholdersEquity',
-        'stockholdersEquity'
-    ]
-    
-    equity_field = get_balance_sheet_field(df_balance, equity_field_options)
-    
-    if equity_field and shares_outstanding:
-        df_balance['Book Value per Share'] = df_balance[equity_field] / shares_outstanding
-        return 'Book Value per Share', equity_field
-    return None, None
-
-def calculate_cash_flow_per_share(df_cashflow, shares_outstanding):
-    """Calcola Cash Flow per Azione"""
-    fcf_field_options = [
-        'freeCashFlow'
-    ]
-    
-    fcf_field = get_balance_sheet_field(df_cashflow, fcf_field_options)
-    
-    if fcf_field and shares_outstanding:
-        df_cashflow['Cash Flow per Share'] = df_cashflow[fcf_field] / shares_outstanding
-        return 'Cash Flow per Share', fcf_field
-    
-    ocf_field_options = [
-        'operatingCashFlow',
-        'netCashProvidedByOperatingActivities'
-    ]
-    
-    ocf_field = get_balance_sheet_field(df_cashflow, ocf_field_options)
-    
-    if ocf_field and shares_outstanding:
-        df_cashflow['Cash Flow per Share'] = df_cashflow[ocf_field] / shares_outstanding
-        return 'Cash Flow per Share', ocf_field
-    
-    # Calcolo manuale del Free Cash Flow
-    ocf_fields = ['operatingCashFlow', 'netCashProvidedByOperatingActivities']
-    capex_fields = ['capitalExpenditure', 'investmentsInPropertyPlantAndEquipment']
-    
-    ocf_field = get_balance_sheet_field(df_cashflow, ocf_fields)
-    capex_field = get_balance_sheet_field(df_cashflow, capex_fields)
-    
-    if ocf_field and capex_field and shares_outstanding:
-        df_cashflow['Free Cash Flow Calcolato'] = df_cashflow[ocf_field] - abs(df_cashflow[capex_field])
-        df_cashflow['Cash Flow per Share'] = df_cashflow['Free Cash Flow Calcolato'] / shares_outstanding
-        return 'Cash Flow per Share', 'Free Cash Flow Calcolato'
-        
-    return None, None
-def calculate_dcf_value(info, annual_financials, annual_cashflow, annual_balance_sheet, currency_symbol):
-    """Calcolo valore intrinseco con metodo DCF"""
-    try:
-        discount_rate = st.slider("Tasso di Sconto (%)", min_value=5.0, max_value=20.0, value=10.0, step=0.5) / 100
-        growth_rate_initial = st.slider("Tasso di Crescita Iniziale (%)", min_value=1.0, max_value=30.0, value=15.0, step=0.5) / 100
-        growth_rate_terminal = st.slider("Tasso di Crescita Terminale (%)", min_value=1.0, max_value=5.0, value=2.5, step=0.1) / 100
-        forecast_period = st.slider("Periodo di Previsione (anni)", min_value=5, max_value=20, value=10)
-        
-        # FMP usa 'freeCashFlow' direttamente
-        fcf_field_options = ['freeCashFlow']
-        fcf_field = get_balance_sheet_field(annual_cashflow, fcf_field_options)
-        
-        if fcf_field is None:
-            ocf_field_options = ['operatingCashFlow', 'netCashProvidedByOperatingActivities']
-            fcf_field = get_balance_sheet_field(annual_cashflow, ocf_field_options)
-            
-            if fcf_field:
-                st.info("Free Cash Flow non disponibile. Utilizzando Operating Cash Flow per il calcolo DCF.")
-        
-        if fcf_field is None:
-            ocf_fields = ['operatingCashFlow', 'netCashProvidedByOperatingActivities']
-            capex_fields = ['capitalExpenditure', 'investmentsInPropertyPlantAndEquipment']
-            
-            ocf_field = get_balance_sheet_field(annual_cashflow, ocf_fields)
-            capex_field = get_balance_sheet_field(annual_cashflow, capex_fields)
-            
-            if ocf_field and capex_field:
-                annual_cashflow['free_cash_flow_calculated'] = annual_cashflow[ocf_field] - abs(annual_cashflow[capex_field])
-                fcf_field = 'free_cash_flow_calculated'
-                st.info("Free Cash Flow calcolato come: Operating Cash Flow - Capital Expenditures")
-        
-        if fcf_field is None:
-            st.warning("Dati di Free Cash Flow e Operating Cash Flow non disponibili.")
-            return None
-            
-        fcf = annual_cashflow[fcf_field].iloc[0]
-        
-        if fcf <= 0 and len(annual_cashflow) >= 3:
-            fcf = annual_cashflow[fcf_field].iloc[:3].mean()
-            if fcf <= 0:
-                st.warning("Free Cash Flow negativo o zero, impossibile calcolare DCF.")
-                return None
-        elif fcf <= 0:
-            st.warning("Free Cash Flow negativo o zero, impossibile calcolare DCF.")
-            return None
-        
-        # Ottieni shares outstanding
-        shares_outstanding = (info.get('sharesOutstanding') or 
-                            info.get('impliedSharesOutstanding') or
-                            info.get('floatShares'))
-        
-        if not shares_outstanding and additional_metrics:
-            shares_outstanding = additional_metrics.get('numberOfShares')
-        
-        if not shares_outstanding and not annual_financials.empty:
-            weighted_avg_field_options = [
-                'weightedAverageShsOutDil',
-                'weightedAverageShsOut'
-            ]
-            
-            for field in weighted_avg_field_options:
-                if field in annual_financials.columns:
-                    shares_outstanding = annual_financials[field].iloc[0]
-                    if shares_outstanding and shares_outstanding > 0:
-                        break
-        
-        if not shares_outstanding:
-            st.warning("Numero di azioni in circolazione non disponibile.")
-            return None
-        
-        projected_cash_flows = []
-        
-        for year in range(1, forecast_period + 1):
-            if forecast_period > 1:
-                weight = (forecast_period - year) / (forecast_period - 1)
-                growth_rate = weight * growth_rate_initial + (1 - weight) * growth_rate_terminal
-            else:
-                growth_rate = growth_rate_terminal
-                
-            projected_cf = fcf * (1 + growth_rate) ** year
-            present_value = projected_cf / (1 + discount_rate) ** year
-            projected_cash_flows.append(present_value)
-        
-        terminal_value = (fcf * (1 + growth_rate_terminal) ** forecast_period * (1 + growth_rate_terminal)) / (discount_rate - growth_rate_terminal)
-        present_terminal_value = terminal_value / (1 + discount_rate) ** forecast_period
-        
-        enterprise_value = sum(projected_cash_flows) + present_terminal_value
-        
-        debt_field_options = [
-            'totalDebt',
-            'netDebt',
-            'longTermDebt'
-        ]
-        
-        cash_field_options = [
-            'cashAndCashEquivalents',
-            'cashAndShortTermInvestments'
-        ]
-        
-        balance_sheet = annual_balance_sheet.iloc[0] if not annual_balance_sheet.empty else None
-        
-        if balance_sheet is not None:
-            debt_field = get_balance_sheet_field(annual_balance_sheet, debt_field_options)
-            cash_field = get_balance_sheet_field(annual_balance_sheet, cash_field_options)
-            
-            total_debt = balance_sheet[debt_field] if debt_field else 0
-            total_cash = balance_sheet[cash_field] if cash_field else 0
-            
-            equity_value = enterprise_value - total_debt + total_cash
-            intrinsic_value_per_share = equity_value / shares_outstanding
-            
-            current_price = info.get('current_price', info.get('price', 0))
-            
-            st.metric(
-                label="Valore Intrinseco per Azione (DCF)",
-                value=f"{currency_symbol}{intrinsic_value_per_share:.2f}",
-                delta=f"{(intrinsic_value_per_share / current_price - 1) * 100:.1f}% vs prezzo attuale" if current_price > 0 else "N/A"
-            )
-            
-            st.info(f"""
-            **Parametri utilizzati:**
-            - Free Cash Flow: {currency_symbol}{fcf/1000000:.2f}M
-            - Tasso di crescita iniziale: {growth_rate_initial*100:.1f}%
-            - Tasso di crescita terminale: {growth_rate_terminal*100:.1f}%
-            - Tasso di sconto: {discount_rate*100:.1f}%
-            - Periodo di previsione: {forecast_period} anni
-            """)
-            
-            return intrinsic_value_per_share
-        else:
-            st.warning("Dati del bilancio non disponibili.")
-            return None
-        
-    except Exception as e:
-        st.error(f"Errore nel calcolo DCF: {str(e)}")
-        import traceback
-        st.error(traceback.format_exc())
-        return None
-
-def calculate_graham_value(info, annual_financials, currency_symbol, earnings_growth=None):
-    """Calcolo valore intrinseco con Formula di Graham"""
-    try:
-        eps = (info.get('trailingEPS') or 
-               info.get('ttmEPS') or
-               additional_metrics.get('revenuePerShare'))
-        
-        if not eps or eps <= 0:
-            if not annual_financials.empty and 'eps' in annual_financials.columns:
-                eps = annual_financials['eps'].iloc[0]
-            elif not annual_financials.empty and 'epsdiluted' in annual_financials.columns:
-                eps = annual_financials['epsdiluted'].iloc[0]
-        
-        if not eps or eps <= 0:
-            st.warning("EPS non disponibile dai dati. Inserisci un valore manualmente.")
-            eps = st.number_input("Inserisci EPS manualmente:", value=1.0, step=0.1)
-        
-        if earnings_growth is None:
-            if not annual_financials.empty and len(annual_financials) > 1:
-                eps_column = 'epsdiluted' if 'epsdiluted' in annual_financials.columns else 'eps'
-                
-                if eps_column in annual_financials.columns:
-                    sorted_data = annual_financials.sort_index(ascending=False)
-                    
-                    latest_eps = sorted_data[eps_column].iloc[0]
-                    oldest_eps = sorted_data[eps_column].iloc[-1]
-                    
-                    years = (sorted_data.index[0] - sorted_data.index[-1]).days / 365.25
-                    
-                    if years > 0 and latest_eps > 0 and oldest_eps > 0:
-                        earnings_growth = ((latest_eps / oldest_eps) ** (1/years) - 1) * 100
-            
-            if earnings_growth is None:
-                earnings_growth = 10.0
-                st.warning("Tasso di crescita degli utili non disponibile. Utilizzando 10.0% come valore predefinito.")
-        
-        growth_rate_default = min(max(float(earnings_growth), 0.0), 30.0)
-        
-        growth_rate = st.slider("Tasso di Crescita Annuale (%)", 
-                               min_value=0.0, 
-                               max_value=30.0, 
-                               value=float(growth_rate_default),
-                               step=0.5)
-        
-        bond_yield = st.slider("Rendimento Bond AAA (%)", 
-                              min_value=1.0, 
-                              max_value=10.0, 
-                              value=4.5, 
-                              step=0.1)
-        
-        intrinsic_value = eps * (8.5 + 2 * (growth_rate / 100)) * (4.4 / bond_yield)
-        
-        current_price = info.get('currentPrice', info.get('regularMarketPrice', 0))
-        
-        st.metric(
-            label="Valore Intrinseco per Azione (Graham)",
-            value=f"{currency_symbol}{intrinsic_value:.2f}",
-            delta=f"{(intrinsic_value / current_price - 1) * 100:.1f}% vs prezzo attuale" if current_price > 0 else "N/A"
-        )
-        
-        st.info(f"""
-        **Formula di Graham utilizzata:** V = EPS × (8.5 + 2g) × 4.4 / Y
-        
-        **Parametri:**
-        - EPS: {eps:.2f}
-        - Tasso di crescita (g): {growth_rate:.1f}%
-        - Rendimento Bond AAA (Y): {bond_yield:.1f}%
-        
-        **Calcolo:** {currency_symbol}{eps:.2f} × ({8.5 + (2 * growth_rate / 100):.2f}) × ({4.4 / bond_yield:.2f}) = {currency_symbol}{intrinsic_value:.2f}
-        """)
-        
-        return intrinsic_value
-        
-    except Exception as e:
-        st.error(f"Errore nel calcolo con la Formula di Graham: {str(e)}")
-        import traceback
-        st.error(traceback.format_exc())
-        return None
 
 def safe_format(value, format_str):
     try:
@@ -631,7 +414,6 @@ def format_indicator_value(value, condition_type):
             is_green = False
     elif condition_type == "debt_equity":
         if value is not None and value != 0:
-            # Mostra Debt/Equity come percentuale
             formatted_value = f"{value * 100:.2f}%"
             is_green = should_be_green(value, condition_type)
         else:
@@ -649,6 +431,7 @@ def format_indicator_value(value, condition_type):
         is_green = should_be_green(formatted_value, condition_type)
     
     return formatted_value, is_green
+
 # ========== APPLICAZIONE PRINCIPALE ==========
 
 st.title('Analisi Fondamentale Azioni')
@@ -676,7 +459,7 @@ if not symbol:
     st.stop()
 
 # Recupera informazioni di base
-information = fetch_stock_info_yahoo(symbol)
+information = fetch_stock_info_fmp(symbol, FMP_API_KEY)
 
 if not information:
     st.error(f"❌ Nessuna informazione trovata per il ticker {symbol}. Verifica che il ticker sia corretto.")
@@ -689,11 +472,13 @@ currency_symbol = get_currency_symbol(currency_code)
 # Recupera metriche aggiuntive da FMP
 additional_metrics = {}
 company_profile = {}
-income_statements_preview = pd.DataFrame()  # Per calcolare i margini corretti
+financial_ratios = {}
+income_statements_preview = pd.DataFrame()
+
 if FMP_API_KEY and FMP_API_KEY != "YOUR_FMP_API_KEY_HERE":
     additional_metrics = fetch_financial_metrics_fmp(symbol, FMP_API_KEY)
     company_profile = fetch_company_profile_fmp(symbol, FMP_API_KEY)
-    # Carica i dati del conto economico per calcolare i margini reali
+    financial_ratios = fetch_financial_ratios_fmp(symbol, FMP_API_KEY)
     income_statements_preview = fetch_income_statements_fmp(symbol, FMP_API_KEY, period='annual', limit=1)
 
 # === SEZIONE INFORMAZIONI TITOLO E GRAFICO ===
@@ -725,50 +510,230 @@ with col_info:
     st.info(f'**Settore:** {sector}')
 
     st.subheader("Indicatori Chiave")
-    
+
     col_ind1, col_ind2 = st.columns(2)
-    
+
     with col_ind1:
         pe_ratio = information.get("trailingPE", additional_metrics.get("peRatio", 0))
-        st.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
+        if pe_ratio:
+            st.metric("P/E Ratio", f"{pe_ratio:.2f}")
+        else:
+            st.metric("P/E Ratio", "N/A")
         
-        dividend_yield = information.get("dividendYield", 0)
-        dividend_pct = dividend_yield * 100 if dividend_yield else 0
-        st.metric("Rendimento Dividendo", f"{dividend_pct/100:.2f}%" if dividend_pct else "N/A")
-    
+        # FIX: Rendimento Dividendo - Prova più fonti
+        dividend_yield = None
+        
+        # 1. Prova da informazioni base
+        dividend_yield = information.get("dividendYield")
+        if dividend_yield and dividend_yield > 0:
+            st.metric("Rendimento Dividendo", f"{dividend_yield*100:.2f}%")
+        else:
+            # 2. Calcola da dividend rate e prezzo
+            dividend_rate = information.get("dividendRate")
+            current_price_val = information.get("currentPrice", information.get("regularMarketPrice"))
+            if dividend_rate and current_price_val and current_price_val > 0:
+                calculated_yield = (dividend_rate / current_price_val) * 100
+                st.metric("Rendimento Dividendo", f"{calculated_yield:.2f}%")
+            else:
+                # 3. Prova da FMP - calcola da storico dividendi ultimi 12 mesi
+                dividend_history = fetch_dividend_history_fmp(symbol, FMP_API_KEY)
+                if not dividend_history.empty and current_price_val and current_price_val > 0:
+                    one_year_ago = datetime.datetime.now() - timedelta(days=365)
+                    recent_divs = dividend_history[dividend_history['date'] >= one_year_ago]
+                    if not recent_divs.empty:
+                        dividend_field = 'adjDividend' if 'adjDividend' in recent_divs.columns else 'dividend'
+                        annual_dividend = recent_divs[dividend_field].sum()
+                        if annual_dividend > 0:
+                            calculated_yield = (annual_dividend / current_price_val) * 100
+                            st.metric("Rendimento Dividendo", f"{calculated_yield:.2f}%")
+                        else:
+                            st.metric("Rendimento Dividendo", "N/A")
+                    else:
+                        st.metric("Rendimento Dividendo", "N/A")
+                else:
+                    st.metric("Rendimento Dividendo", "N/A")
+
     with col_ind2:
-        pb_ratio = information.get("priceToBook", additional_metrics.get("pbRatio", 0))
-        st.metric("P/B Ratio", f"{pb_ratio:.2f}" if pb_ratio else "N/A")
+        # FIX: P/B Ratio
+        pb_ratio = information.get("priceToBook")
+        if not pb_ratio:
+            pb_ratio = additional_metrics.get("pbRatio")
+        
+        if pb_ratio:
+            st.metric("P/B Ratio", f"{pb_ratio:.2f}")
+        else:
+            # Prova a calcolarlo manualmente
+            current_price_val = information.get("currentPrice", information.get("regularMarketPrice"))
+            book_value = information.get("bookValue")
+            
+            if current_price_val and book_value and book_value > 0:
+                pb_ratio = current_price_val / book_value
+                st.metric("P/B Ratio", f"{pb_ratio:.2f}")
+            else:
+                st.metric("P/B Ratio", "N/A")
         
         beta = information.get("beta", company_profile.get("beta", 0))
-        st.metric("Beta", f"{beta:.2f}" if beta else "N/A")
+        if beta:
+            st.metric("Beta", f"{beta:.2f}")
+        else:
+            st.metric("Beta", "N/A")
+
+    # SCORE DIRAMCO - SPOSTATO QUI SOTTO
+    #st.write("")  # Spazio
+    ticker_score = search_ticker_score(symbol)
+
+    if ticker_score is not None:
+        # Determina il colore in base allo score
+        if ticker_score >= 9:
+            score_color = "#00b300"  # Verde molto scuro
+            score_emoji = "🟢🟢"
+        elif ticker_score >= 8:
+            score_color = "#00e600"  # Verde
+            score_emoji = "🟢"
+        elif ticker_score >= 6:
+            score_color = "#ffd700"  # Giallo
+            score_emoji = "🟡"
+        else:
+            score_color = "#ff4444"  # Rosso
+            score_emoji = "🔴"
+        
+        st.markdown(f"""
+        <div style='padding: 15px; border-radius: 10px; background-color: {score_color}20; border: 2px solid {score_color}; margin-top: 15px;'>
+            <h3 style='margin: 0; color: {score_color};'>{score_emoji} Score DIRAMCO: {ticker_score:.1f}/10</h3>
+            <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Valutazione qualità Analisi Fondamentale. Esprime indirettamente il MOAT di un titolo.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("ℹ️ **Score DIRAMCO:** Non disponibile al momento")
 
 with col_chart:
-    price_history = fetch_price_history_yahoo(symbol)
+    price_history = fetch_price_history_fmp(symbol, FMP_API_KEY)
     
     if not price_history.empty:
         st.subheader('Grafico 1 Anno')
         
-        price_history_reset = price_history.rename_axis('Data').reset_index()
-        
-        candle_stick_chart = go.Figure(data=[go.Candlestick(
-            x=price_history_reset['Data'], 
-            open=price_history_reset['Open'], 
-            low=price_history_reset['Low'],
-            high=price_history_reset['High'],
-            close=price_history_reset['Close'],
-            name=symbol
-        )])
-        
-        candle_stick_chart.update_layout(
-            height=500,
-            xaxis_title="Data",
-            yaxis_title=f"Prezzo ({currency_symbol})",
-            xaxis_rangeslider_visible=False,
-            showlegend=False
-        )
-        
-        st.plotly_chart(candle_stick_chart, use_container_width=True)
+        try:
+            price_history_clean = price_history.copy()
+            
+            # RIMUOVI TIMEZONE dall'indice
+            if isinstance(price_history_clean.index, pd.DatetimeIndex):
+                if price_history_clean.index.tz is not None:
+                    price_history_clean.index = price_history_clean.index.tz_localize(None)
+            
+            # Filtra solo l'ultimo anno
+            end_date = datetime.datetime.now()
+            start_date = end_date - timedelta(days=365)
+            
+            price_history_clean = price_history_clean[price_history_clean.index >= start_date]
+            
+            if price_history_clean.empty:
+                price_history_clean = price_history.copy()
+                if isinstance(price_history_clean.index, pd.DatetimeIndex) and price_history_clean.index.tz is not None:
+                    price_history_clean.index = price_history_clean.index.tz_localize(None)
+            
+            # Reset index e prepara dati
+            price_history_reset = price_history_clean.reset_index()
+            
+            if price_history_reset.columns[0] != 'Date':
+                price_history_reset.rename(columns={price_history_reset.columns[0]: 'Date'}, inplace=True)
+            
+            price_history_reset['Date'] = pd.to_datetime(price_history_reset['Date'])
+            if hasattr(price_history_reset['Date'].dtype, 'tz') and price_history_reset['Date'].dt.tz is not None:
+                price_history_reset['Date'] = price_history_reset['Date'].dt.tz_localize(None)
+            
+            price_history_reset = price_history_reset.sort_values('Date')
+            price_history_reset = price_history_reset.dropna(subset=['Open', 'High', 'Low', 'Close'])
+            
+            st.caption(f" Dati dal {price_history_reset['Date'].min().strftime('%d/%m/%Y')} al {price_history_reset['Date'].max().strftime('%d/%m/%Y')} ({len(price_history_reset)} giorni)")
+            
+            if len(price_history_reset) < 2:
+                st.error("Dati insufficienti per creare il grafico")
+            else:
+                fig = go.Figure()
+                
+                fig.add_trace(go.Candlestick(
+                    x=price_history_reset['Date'].tolist(),
+                    open=price_history_reset['Open'].tolist(),
+                    high=price_history_reset['High'].tolist(),
+                    low=price_history_reset['Low'].tolist(),
+                    close=price_history_reset['Close'].tolist(),
+                    name=symbol,
+                    increasing={'line': {'color': '#26a69a'}, 'fillcolor': '#26a69a'},
+                    decreasing={'line': {'color': '#ef5350'}, 'fillcolor': '#ef5350'}
+                ))
+                
+                fig.update_layout(
+                    height=500,
+                    margin=dict(l=50, r=50, t=30, b=50),
+                    xaxis_title="Data",
+                    yaxis_title=f"Prezzo ({currency_symbol})",
+                    xaxis_rangeslider_visible=False,
+                    showlegend=False,
+                    hovermode='x unified',
+                    template='plotly_white'
+                )
+                
+                fig.update_xaxes(
+                    type='date',
+                    tickformat='%b %Y',
+                    tickmode='auto',
+                    nticks=10
+                )
+                
+                fig.update_yaxes(
+                    tickprefix=currency_symbol,
+                    side='right'
+                )
+                
+                st.plotly_chart(fig, use_container_width=True, key='candlestick_chart')
+                
+                # Calcola YTD
+                current_year = datetime.datetime.now().year
+                ytd_data = price_history_reset[price_history_reset['Date'].dt.year == current_year]
+                
+                ytd_change_pct = None
+                if not ytd_data.empty and len(ytd_data) > 0:
+                    ytd_first_close = ytd_data['Close'].iloc[0]
+                    ytd_last_close = ytd_data['Close'].iloc[-1]
+                    ytd_change_pct = ((ytd_last_close - ytd_first_close) / ytd_first_close) * 100
+                
+                # Statistiche
+                col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
+                
+                with col_stat1:
+                    st.metric("Massimo 52W", f"{currency_symbol}{price_history_reset['High'].max():.2f}")
+                
+                with col_stat2:
+                    st.metric("Minimo 52W", f"{currency_symbol}{price_history_reset['Low'].min():.2f}")
+                
+                with col_stat3:
+                    if len(price_history_reset) > 1:
+                        first_close = price_history_reset['Close'].iloc[0]
+                        last_close = price_history_reset['Close'].iloc[-1]
+                        change_pct = ((last_close - first_close) / first_close) * 100
+                        st.metric("Variazione 1Y", f"{change_pct:+.2f}%", delta_color="normal")
+                
+                with col_stat4:
+                    if ytd_change_pct is not None:
+                        st.metric("Variazione YTD", f"{ytd_change_pct:+.2f}%", delta_color="normal")
+                    else:
+                        st.metric("Variazione YTD", "N/A")
+                
+                with col_stat5:
+                    if 'Volume' in price_history_reset.columns:
+                        avg_volume = price_history_reset['Volume'].mean()
+                        if avg_volume >= 1000000:
+                            st.metric("Volume medio", f"{avg_volume/1000000:.1f}M")
+                        elif avg_volume >= 1000:
+                            st.metric("Volume medio", f"{avg_volume/1000:.1f}K")
+                        else:
+                            st.metric("Volume medio", f"{avg_volume:.0f}")
+                
+        except Exception as e:
+            st.error(f"❌ Errore nella creazione del grafico: {str(e)}")
+            import traceback
+            with st.expander("🔍 Traceback completo"):
+                st.code(traceback.format_exc())
         
         st.caption('Visualizza Analisi Tecnica Avanzata tramite IA [qui](https://diramco.com/analisi-tecnica-ai/)')
     else:
@@ -790,17 +755,15 @@ price_to_sales = additional_metrics.get("priceToSalesRatio")
 if not price_to_sales:
     price_to_sales = information.get("priceToSalesTrailing12Months", 0)
 
-# Calcola PEG Ratio da FMP
+# Calcola PEG Ratio
 peg_ratio = None
 earnings_quarterly_growth = additional_metrics.get("earningsYield")
 if pe_ratio and earnings_quarterly_growth and earnings_quarterly_growth > 0:
-    # Converti earnings yield in growth rate se necessario
     eps_growth = earnings_quarterly_growth
     if eps_growth > 1:
         eps_growth = eps_growth / 100
     peg_ratio = pe_ratio / (eps_growth * 100)
 else:
-    # Fallback a Yahoo Finance
     eps_growth = information.get("earningsGrowth", 0)
     if pe_ratio and eps_growth and eps_growth > 0:
         peg_ratio = pe_ratio / (eps_growth * 100)
@@ -812,19 +775,25 @@ if roe and roe > 1:
 if not roe:
     roe = information.get("returnOnEquity", 0)
 
+# FIX ROA - Prova più fonti
 roa = additional_metrics.get("returnOnAssets")
 if roa and roa > 1:
     roa = roa / 100
-if not roa:
+if not roa or roa == 0:
+    # Prova da financial_ratios
+    roa = financial_ratios.get("returnOnAssets")
+    if roa and roa > 1:
+        roa = roa / 100
+if not roa or roa == 0:
     roa = information.get("returnOnAssets", 0)
 
 roic = additional_metrics.get('roic')
 if roic and roic > 1:
     roic = roic / 100
 if not roic:
-    roic = roa  # Fallback a ROA
+    roic = roa
 
-# Debt to Equity da FMP
+# Debt to Equity
 debt_equity_ratio = additional_metrics.get("debtToEquity")
 if debt_equity_ratio and debt_equity_ratio > 100:
     debt_equity_ratio = debt_equity_ratio / 100
@@ -833,7 +802,7 @@ if not debt_equity_ratio:
     if debt_equity_ratio and debt_equity_ratio > 100:
         debt_equity_ratio = debt_equity_ratio / 100
 
-# Margini da FMP - Calcoliamo direttamente dai dati del conto economico per coerenza con i grafici
+# Margini
 gross_margins = None
 operating_margin = None
 profit_margin = None
@@ -841,21 +810,18 @@ profit_margin = None
 if not income_statements_preview.empty:
     latest_income = income_statements_preview.iloc[0]
     
-    # Calcola Margine Lordo come fa il grafico
     if 'revenue' in latest_income and 'costOfRevenue' in latest_income and latest_income['revenue'] > 0:
         gross_margins = (latest_income['revenue'] - latest_income['costOfRevenue']) / latest_income['revenue']
     elif 'grossProfit' in latest_income and 'revenue' in latest_income and latest_income['revenue'] > 0:
         gross_margins = latest_income['grossProfit'] / latest_income['revenue']
     
-    # Calcola Margine Operativo
     if 'operatingIncome' in latest_income and 'revenue' in latest_income and latest_income['revenue'] > 0:
         operating_margin = latest_income['operatingIncome'] / latest_income['revenue']
     
-    # Calcola Margine Netto
     if 'netIncome' in latest_income and 'revenue' in latest_income and latest_income['revenue'] > 0:
         profit_margin = latest_income['netIncome'] / latest_income['revenue']
 
-# Fallback a dati aggregati se non disponibili dal conto economico
+# Fallback
 if gross_margins is None:
     gross_margins = additional_metrics.get("grossProfitMargin")
     if gross_margins and gross_margins > 1:
@@ -877,14 +843,19 @@ if profit_margin is None:
     if profit_margin is None:
         profit_margin = information.get("profitMargins", 0)
 
-# Liquidità da FMP
+# Liquidità
 current_ratio = additional_metrics.get("currentRatio")
 if not current_ratio:
     current_ratio = information.get("currentRatio", 0)
 
-quick_ratio = information.get("quickRatio", 0)  # Non sempre disponibile in FMP
+# FIX Quick Ratio - Prova più fonti
+quick_ratio = financial_ratios.get("quickRatio")
+if not quick_ratio or quick_ratio == 0:
+    quick_ratio = additional_metrics.get("quickRatio")
+if not quick_ratio or quick_ratio == 0:
+    quick_ratio = information.get("quickRatio", 0)
 
-# Beta da profilo aziendale FMP
+# Beta
 beta = company_profile.get("beta")
 if not beta:
     beta = information.get("beta", 0)
@@ -1021,7 +992,232 @@ with st.expander("Come interpretare questi indicatori", expanded=False):
     - **Current Ratio > 1.5**: Buona liquidità a breve termine ✅
     - **Quick Ratio > 1.0**: Liquidità immediata sufficiente ✅
     - **Beta 0.5-1.5**: Volatilità in linea con il mercato ✅
+    
+    ### Score DIRAMCO
+    - **≥ 9**: Qualità eccellente 🟢🟢
+    - **≥ 8**: Qualità molto buona 🟢
+    - **≥ 6**: Qualità accettabile 🟡
+    - **< 6**: Cautela necessaria 🔴
     """)
+
+def calculate_dcf_value(info, annual_financials, annual_cashflow, annual_balance_sheet, currency_symbol):
+    """Calcolo valore intrinseco con metodo DCF"""
+    try:
+        discount_rate = st.slider("Tasso di Sconto (%)", min_value=5.0, max_value=20.0, value=10.0, step=0.5) / 100
+        growth_rate_initial = st.slider("Tasso di Crescita Iniziale (%)", min_value=1.0, max_value=30.0, value=15.0, step=0.5) / 100
+        growth_rate_terminal = st.slider("Tasso di Crescita Terminale (%)", min_value=1.0, max_value=5.0, value=2.5, step=0.1) / 100
+        forecast_period = st.slider("Periodo di Previsione (anni)", min_value=5, max_value=20, value=10)
+        
+        # FMP usa 'freeCashFlow' direttamente
+        fcf_field_options = ['freeCashFlow']
+        fcf_field = get_balance_sheet_field(annual_cashflow, fcf_field_options)
+        
+        if fcf_field is None:
+            ocf_field_options = ['operatingCashFlow', 'netCashProvidedByOperatingActivities']
+            fcf_field = get_balance_sheet_field(annual_cashflow, ocf_field_options)
+            
+            if fcf_field:
+                st.info("Free Cash Flow non disponibile. Utilizzando Operating Cash Flow per il calcolo DCF.")
+        
+        if fcf_field is None:
+            ocf_fields = ['operatingCashFlow', 'netCashProvidedByOperatingActivities']
+            capex_fields = ['capitalExpenditure', 'investmentsInPropertyPlantAndEquipment']
+            
+            ocf_field = get_balance_sheet_field(annual_cashflow, ocf_fields)
+            capex_field = get_balance_sheet_field(annual_cashflow, capex_fields)
+            
+            if ocf_field and capex_field:
+                annual_cashflow['free_cash_flow_calculated'] = annual_cashflow[ocf_field] - abs(annual_cashflow[capex_field])
+                fcf_field = 'free_cash_flow_calculated'
+                st.info("Free Cash Flow calcolato come: Operating Cash Flow - Capital Expenditures")
+        
+        if fcf_field is None:
+            st.warning("Dati di Free Cash Flow e Operating Cash Flow non disponibili.")
+            return None
+            
+        fcf = annual_cashflow[fcf_field].iloc[0]
+        
+        if fcf <= 0 and len(annual_cashflow) >= 3:
+            fcf = annual_cashflow[fcf_field].iloc[:3].mean()
+            if fcf <= 0:
+                st.warning("Free Cash Flow negativo o zero, impossibile calcolare DCF.")
+                return None
+        elif fcf <= 0:
+            st.warning("Free Cash Flow negativo o zero, impossibile calcolare DCF.")
+            return None
+        
+        # Ottieni shares outstanding
+        shares_outstanding = (info.get('sharesOutstanding') or 
+                            info.get('impliedSharesOutstanding') or
+                            info.get('floatShares'))
+        
+        if not shares_outstanding and additional_metrics:
+            shares_outstanding = additional_metrics.get('numberOfShares')
+        
+        if not shares_outstanding and not annual_financials.empty:
+            weighted_avg_field_options = [
+                'weightedAverageShsOutDil',
+                'weightedAverageShsOut'
+            ]
+            
+            for field in weighted_avg_field_options:
+                if field in annual_financials.columns:
+                    shares_outstanding = annual_financials[field].iloc[0]
+                    if shares_outstanding and shares_outstanding > 0:
+                        break
+        
+        if not shares_outstanding:
+            st.warning("Numero di azioni in circolazione non disponibile.")
+            return None
+        
+        projected_cash_flows = []
+        
+        for year in range(1, forecast_period + 1):
+            if forecast_period > 1:
+                weight = (forecast_period - year) / (forecast_period - 1)
+                growth_rate = weight * growth_rate_initial + (1 - weight) * growth_rate_terminal
+            else:
+                growth_rate = growth_rate_terminal
+                
+            projected_cf = fcf * (1 + growth_rate) ** year
+            present_value = projected_cf / (1 + discount_rate) ** year
+            projected_cash_flows.append(present_value)
+        
+        terminal_value = (fcf * (1 + growth_rate_terminal) ** forecast_period * (1 + growth_rate_terminal)) / (discount_rate - growth_rate_terminal)
+        present_terminal_value = terminal_value / (1 + discount_rate) ** forecast_period
+        
+        enterprise_value = sum(projected_cash_flows) + present_terminal_value
+        
+        debt_field_options = [
+            'totalDebt',
+            'netDebt',
+            'longTermDebt'
+        ]
+        
+        cash_field_options = [
+            'cashAndCashEquivalents',
+            'cashAndShortTermInvestments'
+        ]
+        
+        balance_sheet = annual_balance_sheet.iloc[0] if not annual_balance_sheet.empty else None
+        
+        if balance_sheet is not None:
+            debt_field = get_balance_sheet_field(annual_balance_sheet, debt_field_options)
+            cash_field = get_balance_sheet_field(annual_balance_sheet, cash_field_options)
+            
+            total_debt = balance_sheet[debt_field] if debt_field else 0
+            total_cash = balance_sheet[cash_field] if cash_field else 0
+            
+            equity_value = enterprise_value - total_debt + total_cash
+            intrinsic_value_per_share = equity_value / shares_outstanding
+            
+            current_price = info.get('currentPrice', info.get('price', 0))
+            
+            st.metric(
+                label="Valore Intrinseco per Azione (DCF)",
+                value=f"{currency_symbol}{intrinsic_value_per_share:.2f}",
+                delta=f"{(intrinsic_value_per_share / current_price - 1) * 100:.1f}% vs prezzo attuale" if current_price > 0 else "N/A"
+            )
+            
+            st.info(f"""
+            **Parametri utilizzati:**
+            - Free Cash Flow: {currency_symbol}{fcf/1000000:.2f}M
+            - Tasso di crescita iniziale: {growth_rate_initial*100:.1f}%
+            - Tasso di crescita terminale: {growth_rate_terminal*100:.1f}%
+            - Tasso di sconto: {discount_rate*100:.1f}%
+            - Periodo di previsione: {forecast_period} anni
+            """)
+            
+            return intrinsic_value_per_share
+        else:
+            st.warning("Dati del bilancio non disponibili.")
+            return None
+        
+    except Exception as e:
+        st.error(f"Errore nel calcolo DCF: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None
+
+def calculate_graham_value(info, annual_financials, currency_symbol, earnings_growth=None):
+    """Calcolo valore intrinseco con Formula di Graham"""
+    try:
+        eps = (info.get('trailingEPS') or 
+               info.get('ttmEPS') or
+               additional_metrics.get('revenuePerShare'))
+        
+        if not eps or eps <= 0:
+            if not annual_financials.empty and 'eps' in annual_financials.columns:
+                eps = annual_financials['eps'].iloc[0]
+            elif not annual_financials.empty and 'epsdiluted' in annual_financials.columns:
+                eps = annual_financials['epsdiluted'].iloc[0]
+        
+        if not eps or eps <= 0:
+            st.warning("EPS non disponibile dai dati. Inserisci un valore manualmente.")
+            eps = st.number_input("Inserisci EPS manualmente:", value=1.0, step=0.1)
+        
+        if earnings_growth is None:
+            if not annual_financials.empty and len(annual_financials) > 1:
+                eps_column = 'epsdiluted' if 'epsdiluted' in annual_financials.columns else 'eps'
+                
+                if eps_column in annual_financials.columns:
+                    sorted_data = annual_financials.sort_index(ascending=False)
+                    
+                    latest_eps = sorted_data[eps_column].iloc[0]
+                    oldest_eps = sorted_data[eps_column].iloc[-1]
+                    
+                    years = (sorted_data.index[0] - sorted_data.index[-1]).days / 365.25
+                    
+                    if years > 0 and latest_eps > 0 and oldest_eps > 0:
+                        earnings_growth = ((latest_eps / oldest_eps) ** (1/years) - 1) * 100
+            
+            if earnings_growth is None:
+                earnings_growth = 10.0
+                st.warning("Tasso di crescita degli utili non disponibile. Utilizzando 10.0% come valore predefinito.")
+        
+        growth_rate_default = min(max(float(earnings_growth), 0.0), 30.0)
+        
+        growth_rate = st.slider("Tasso di Crescita Annuale (%)", 
+                               min_value=0.0, 
+                               max_value=30.0, 
+                               value=float(growth_rate_default),
+                               step=0.5)
+        
+        bond_yield = st.slider("Rendimento Bond AAA (%)", 
+                              min_value=1.0, 
+                              max_value=10.0, 
+                              value=4.5, 
+                              step=0.1)
+        
+        intrinsic_value = eps * (8.5 + 2 * (growth_rate / 100)) * (4.4 / bond_yield)
+        
+        current_price = info.get('currentPrice', info.get('regularMarketPrice', 0))
+        
+        st.metric(
+            label="Valore Intrinseco per Azione (Graham)",
+            value=f"{currency_symbol}{intrinsic_value:.2f}",
+            delta=f"{(intrinsic_value / current_price - 1) * 100:.1f}% vs prezzo attuale" if current_price > 0 else "N/A"
+        )
+        
+        st.info(f"""
+        **Formula di Graham utilizzata:** V = EPS × (8.5 + 2g) × 4.4 / Y
+        
+        **Parametri:**
+        - EPS: {eps:.2f}
+        - Tasso di crescita (g): {growth_rate:.1f}%
+        - Rendimento Bond AAA (Y): {bond_yield:.1f}%
+        
+        **Calcolo:** {currency_symbol}{eps:.2f} × ({8.5 + (2 * growth_rate / 100):.2f}) × ({4.4 / bond_yield:.2f}) = {currency_symbol}{intrinsic_value:.2f}
+        """)
+        
+        return intrinsic_value
+        
+    except Exception as e:
+        st.error(f"Errore nel calcolo con la Formula di Graham: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
+        return None
+
 
 # === SEZIONE ANALISI NEWS ===
 if PERPLEXITY_API_KEY and PERPLEXITY_API_KEY != "YOUR_PERPLEXITY_API_KEY_HERE":
@@ -1055,13 +1251,32 @@ else:
     else:
         period = 'annual'
 
-    with st.spinner("📈 Caricamento dati finanziari..."):
+    with st.spinner("Caricamento dati finanziari..."):
         income_statements = fetch_income_statements_fmp(symbol, FMP_API_KEY, period=period, limit=60)
         balance_sheets = fetch_balance_sheets_fmp(symbol, FMP_API_KEY, period=period, limit=60)
         cashflow_statements = fetch_cashflow_statements_fmp(symbol, FMP_API_KEY, period=period, limit=60)
 
     if income_statements.empty or balance_sheets.empty or cashflow_statements.empty:
         st.warning("⚠️ Alcuni dati finanziari non sono disponibili. I grafici potrebbero essere incompleti.")
+
+    # === CALCOLO SHARES OUTSTANDING (PRIMA DI TUTTO) ===
+    shares_outstanding = (information.get("sharesOutstanding") or 
+                         information.get("impliedSharesOutstanding") or
+                         information.get("floatShares") or
+                         additional_metrics.get("numberOfShares"))
+    
+    # Se non trovato, cerca nei financial statements
+    if not shares_outstanding and not income_statements.empty:
+        shares_field_options = ['weightedAverageShsOutDil', 'weightedAverageShsOut']
+        shares_field = get_balance_sheet_field(income_statements, shares_field_options)
+        if shares_field:
+            sorted_income = income_statements.sort_index(ascending=False)
+            shares_outstanding = sorted_income[shares_field].iloc[0]
+    
+    if shares_outstanding:
+        st.info(f"✓ Azioni in circolazione: {shares_outstanding:,.0f}")
+    else:
+        st.warning("⚠️ Numero di azioni in circolazione non disponibile - alcuni grafici potrebbero non essere mostrati")
 
     # === GRAFICI CONTO ECONOMICO ===
     if not income_statements.empty:
@@ -1072,7 +1287,7 @@ else:
             if period == 'annual':
                 income_reset['Anno'] = income_reset['Date'].dt.strftime('%Y')
             else:
-                income_reset['Quarter'] = income_reset['Date'].dt.strftime('%Y-Q%q')
+                income_reset['Quarter'] = income_reset['Date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
         
         income_reset = income_reset.sort_values(by='Date', ascending=False).head(60)
         income_reset = income_reset.sort_values(by='Date')
@@ -1131,9 +1346,7 @@ else:
             dividend_history = fetch_dividend_history_fmp(symbol, FMP_API_KEY)
             
             if not dividend_history.empty:
-                # Usa i dividendi già aggiustati da FMP (campo 'adjDividend' se disponibile)
                 dividend_field = 'adjDividend' if 'adjDividend' in dividend_history.columns else 'dividend'
-                
                 dividend_history['Year'] = dividend_history['date'].dt.year
                 
                 if period == 'annual':
@@ -1150,7 +1363,7 @@ else:
                         color_discrete_sequence=['#e377c2']
                     )
                 else:
-                    dividend_history['Quarter'] = dividend_history['date'].dt.to_period('Q').astype(str)
+                    dividend_history['Quarter'] = dividend_history['date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
                     dividend_history = dividend_history.sort_values('date')
                     dividend_history = dividend_history.tail(60)
                     
@@ -1166,7 +1379,6 @@ else:
                 fig_dividends.update_layout(height=350)
                 st.plotly_chart(fig_dividends, use_container_width=True)
                 
-                # Nota informativa sugli aggiustamenti
                 if dividend_field == 'adjDividend':
                     st.caption("✓ Dividendi aggiustati per split azionari")
             else:
@@ -1178,19 +1390,17 @@ else:
                     shares_field = get_balance_sheet_field(income_statements, ['weightedAverageShsOutDil', 'weightedAverageShsOut'])
                     
                     if shares_field and not income_reset.empty:
-                        # Merge cashflow con income per avere dividendi e shares nello stesso dataframe
-                        cashflow_reset = cashflow_statements.reset_index()
-                        if 'Date' in cashflow_reset.columns:
+                        cashflow_temp = cashflow_statements.reset_index()
+                        if 'Date' in cashflow_temp.columns:
                             if period == 'annual':
-                                cashflow_reset['Anno'] = cashflow_reset['Date'].dt.strftime('%Y')
+                                cashflow_temp['Anno'] = cashflow_temp['Date'].dt.strftime('%Y')
                             else:
-                                cashflow_reset['Quarter'] = cashflow_reset['Date'].dt.strftime('%Y-Q%q')
+                                cashflow_temp['Quarter'] = cashflow_temp['Date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
                         
-                        cashflow_reset = cashflow_reset.sort_values(by='Date', ascending=False).head(60)
-                        cashflow_reset = cashflow_reset.sort_values(by='Date')
+                        cashflow_temp = cashflow_temp.sort_values(by='Date', ascending=False).head(60)
+                        cashflow_temp = cashflow_temp.sort_values(by='Date')
                         
-                        # Merge per ottenere shares e dividends insieme
-                        merged_data = cashflow_reset.merge(
+                        merged_data = cashflow_temp.merge(
                             income_reset[['Date', shares_field]], 
                             on='Date', 
                             how='inner'
@@ -1200,10 +1410,8 @@ else:
                             merged_data['Dividendo per Azione'] = abs(merged_data[dividends_field]) / merged_data[shares_field]
                             
                             if period == 'annual':
-                                merged_data['Anno'] = merged_data['Date'].dt.strftime('%Y')
                                 x_col = 'Anno'
                             else:
-                                merged_data['Quarter'] = merged_data['Date'].dt.strftime('%Y-Q%q')
                                 x_col = 'Quarter'
                             
                             fig_dividends = px.bar(
@@ -1231,24 +1439,17 @@ else:
             dividend_history = fetch_dividend_history_fmp(symbol, FMP_API_KEY)
             
             if eps_field and not dividend_history.empty:
-                # Usa dividendi aggiustati se disponibili
                 dividend_field = 'adjDividend' if 'adjDividend' in dividend_history.columns else 'dividend'
-                
-                # Aggrega dividendi per anno
                 dividend_history['Year'] = dividend_history['date'].dt.year
                 dividend_agg = dividend_history.groupby('Year')[dividend_field].sum().reset_index()
                 
-                # Merge con EPS data
                 income_with_year = income_reset.copy()
                 income_with_year['Year'] = income_with_year['Date'].dt.year
                 
                 payout_data = income_with_year.merge(dividend_agg, on='Year', how='inner')
                 
                 if not payout_data.empty and eps_field in payout_data.columns:
-                    # Calcola Payout Ratio
                     payout_data['Payout Ratio'] = (payout_data[dividend_field] / payout_data[eps_field]) * 100
-                    
-                    # Filtra valori anomali (il payout può essere > 100% in alcuni casi)
                     payout_data = payout_data[(payout_data['Payout Ratio'] >= 0) & (payout_data['Payout Ratio'] <= 200)]
                     
                     if not payout_data.empty:
@@ -1258,7 +1459,7 @@ else:
                             payout_data['Anno'] = payout_data['Year'].astype(str)
                             x_col = 'Anno'
                         else:
-                            payout_data['Quarter'] = payout_data['Date'].dt.strftime('%Y-Q%q')
+                            payout_data['Quarter'] = payout_data['Date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
                             x_col = 'Quarter'
                         
                         fig_payout = px.bar(
@@ -1276,7 +1477,6 @@ else:
                         fig_payout.update_layout(height=350)
                         st.plotly_chart(fig_payout, use_container_width=True)
                         
-                        # Calcola media payout
                         avg_payout = payout_data['Payout Ratio'].mean()
                         st.caption(f"Payout Ratio medio: {avg_payout:.1f}% | {'✓ Sostenibile' if avg_payout < 70 else '⚠️ Elevato'}")
                     else:
@@ -1318,7 +1518,8 @@ else:
                     )
                     fig_gross_margin.update_layout(height=350)
                     st.plotly_chart(fig_gross_margin, use_container_width=True)
-                    # === GRAFICI BILANCIO ===
+
+    # === GRAFICI BILANCIO ===
     if not balance_sheets.empty:
         st.subheader("Analisi Stato Patrimoniale")
         
@@ -1327,41 +1528,41 @@ else:
             if period == 'annual':
                 balance_reset['Anno'] = balance_reset['Date'].dt.strftime('%Y')
             else:
-                balance_reset['Quarter'] = balance_reset['Date'].dt.strftime('%Y-Q%q')
+                balance_reset['Quarter'] = balance_reset['Date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
         
         balance_reset = balance_reset.sort_values(by='Date', ascending=False).head(60)
         balance_reset = balance_reset.sort_values(by='Date')
-        
-        shares_outstanding = (information.get("sharesOutstanding") or 
-                             information.get("impliedSharesOutstanding") or
-                             information.get("floatShares") or
-                             additional_metrics.get("numberOfShares"))
         
         col_balance1, col_balance2 = st.columns(2)
         
         with col_balance1:
             if shares_outstanding:
-                bvps_field, equity_field = calculate_book_value_per_share(balance_sheets, shares_outstanding)
-                if bvps_field:
-                    balance_reset = balance_sheets.reset_index()
-                    if 'Date' in balance_reset.columns:
-                        if period == 'annual':
-                            balance_reset['Anno'] = balance_reset['Date'].dt.strftime('%Y')
-                        else:
-                            balance_reset['Quarter'] = balance_reset['Date'].dt.strftime('%Y-Q%q')
-                    
-                    balance_reset = balance_reset.sort_values(by='Date')
+                equity_field_options = [
+                    'totalStockholdersEquity',
+                    'totalEquity',
+                    'shareholdersEquity',
+                    'stockholdersEquity'
+                ]
+                equity_field = get_balance_sheet_field(balance_sheets, equity_field_options)
+                
+                if equity_field and equity_field in balance_reset.columns:
+                    balance_reset['Book Value per Share'] = balance_reset[equity_field] / shares_outstanding
                     
                     fig_bvps = px.bar(
                         balance_reset, 
                         x='Anno' if period == 'annual' else 'Quarter', 
                         y='Book Value per Share',
                         title="Book Value per Share",
-                        labels={"Book Value per Share": f"Book Value per Share ({currency_symbol})", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
+                        labels={"Book Value per Share": f"Book Value per Share ({currency_symbol})", 
+                               'Anno' if period == 'annual' else 'Quarter': "Periodo"},
                         color_discrete_sequence=['#17becf']
                     )
                     fig_bvps.update_layout(height=350)
                     st.plotly_chart(fig_bvps, use_container_width=True)
+                else:
+                    st.info("ℹ️ Dati Book Value non disponibili")
+            else:
+                st.info("ℹ️ Numero di azioni in circolazione non disponibile")
         
         with col_balance2:
             debt_fields = ['totalDebt', 'netDebt', 'longTermDebt']
@@ -1381,7 +1582,7 @@ else:
                         debt_equity_data.append({
                             'Date': date,
                             'Debt to Equity': debt_to_equity,
-                            'Anno' if period == 'annual' else 'Quarter': date.strftime('%Y') if period == 'annual' else date.strftime('%Y-Q%q')
+                            'Anno' if period == 'annual' else 'Quarter': date.strftime('%Y') if period == 'annual' else f"{date.year}-Q{(date.month-1)//3 + 1}"
                         })
                 
                 if debt_equity_data:
@@ -1411,7 +1612,7 @@ else:
             if period == 'annual':
                 cashflow_reset['Anno'] = cashflow_reset['Date'].dt.strftime('%Y')
             else:
-                cashflow_reset['Quarter'] = cashflow_reset['Date'].dt.strftime('%Y-Q%q')
+                cashflow_reset['Quarter'] = cashflow_reset['Date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
         
         cashflow_reset = cashflow_reset.sort_values(by='Date', ascending=False).head(60)
         cashflow_reset = cashflow_reset.sort_values(by='Date')
@@ -1452,21 +1653,31 @@ else:
         
         with col_cf3:
             if shares_outstanding:
-                cfps_field, source_field = calculate_cash_flow_per_share(cashflow_statements, shares_outstanding)
-                if cfps_field:
-                    cashflow_reset = cashflow_statements.reset_index()
-                    if 'Date' in cashflow_reset.columns:
-                        if period == 'annual':
-                            cashflow_reset['Anno'] = cashflow_reset['Date'].dt.strftime('%Y')
-                        else:
-                            cashflow_reset['Quarter'] = cashflow_reset['Date'].dt.strftime('%Y-Q%q')
+                fcf_field_options = ['freeCashFlow']
+                fcf_field = get_balance_sheet_field(cashflow_statements, fcf_field_options)
+                
+                if not fcf_field:
+                    ocf_field_options = ['operatingCashFlow', 'netCashProvidedByOperatingActivities']
+                    fcf_field = get_balance_sheet_field(cashflow_statements, ocf_field_options)
+                
+                if not fcf_field:
+                    ocf_fields = ['operatingCashFlow', 'netCashProvidedByOperatingActivities']
+                    capex_fields = ['capitalExpenditure', 'investmentsInPropertyPlantAndEquipment']
                     
-                    cashflow_reset = cashflow_reset.sort_values(by='Date')
+                    ocf_field = get_balance_sheet_field(cashflow_statements, ocf_fields)
+                    capex_field = get_balance_sheet_field(cashflow_statements, capex_fields)
+                    
+                    if ocf_field and capex_field and ocf_field in cashflow_reset.columns and capex_field in cashflow_reset.columns:
+                        cashflow_reset['Free Cash Flow Calcolato'] = cashflow_reset[ocf_field] - abs(cashflow_reset[capex_field])
+                        fcf_field = 'Free Cash Flow Calcolato'
+                
+                if fcf_field and fcf_field in cashflow_reset.columns:
+                    cashflow_reset['Cash Flow per Share'] = cashflow_reset[fcf_field] / shares_outstanding
                     
                     title = "Cash Flow per Share"
-                    if 'free' in source_field.lower():
+                    if 'free' in fcf_field.lower():
                         subtitle = "(Free Cash Flow)"
-                    elif 'calcolato' in source_field.lower():
+                    elif 'calcolato' in fcf_field.lower():
                         subtitle = "(FCF Calcolato)"
                     else:
                         subtitle = "(Operating CF)"
@@ -1476,11 +1687,16 @@ else:
                         x='Anno' if period == 'annual' else 'Quarter', 
                         y='Cash Flow per Share',
                         title=f"{title}<br><sub>{subtitle}</sub>",
-                        labels={"Cash Flow per Share": f"Cash Flow per Share ({currency_symbol})", 'Anno' if period == 'annual' else 'Quarter': "Periodo"},
+                        labels={"Cash Flow per Share": f"Cash Flow per Share ({currency_symbol})", 
+                               'Anno' if period == 'annual' else 'Quarter': "Periodo"},
                         color_discrete_sequence=['#9467bd']
                     )
                     fig_cfps.update_layout(height=350)
                     st.plotly_chart(fig_cfps, use_container_width=True)
+                else:
+                    st.info("ℹ️ Dati Cash Flow non disponibili")
+            else:
+                st.info("ℹ️ Numero di azioni in circolazione non disponibile")
         
         with col_cf4:
             fcf_financing_field_options = ['netCashUsedProvidedByFinancingActivities', 'financingCashFlow']
@@ -1496,7 +1712,8 @@ else:
                 )
                 fig_fcf_financing.update_layout(height=350)
                 st.plotly_chart(fig_fcf_financing, use_container_width=True)
-                # === GRAFICI MULTIPLI DI VALUTAZIONE ===
+
+# === GRAFICI MULTIPLI DI VALUTAZIONE ===
     if not income_statements.empty and not balance_sheets.empty:
         st.subheader("Indicatori di Prezzo Storici")
         
@@ -1524,15 +1741,19 @@ else:
                 
                 valuation_data = []
                 
+                # Calcola EPS più recente
                 latest_eps = None
-                latest_book_value = None
-                
                 eps_field_options = ['epsdiluted', 'eps']
                 eps_field = get_balance_sheet_field(income_statements, eps_field_options)
                 if eps_field:
                     sorted_income = income_statements.sort_index(ascending=False)
                     latest_eps = sorted_income[eps_field].iloc[0]
                 
+                if not latest_eps:
+                    latest_eps = information.get('trailingEPS', information.get('ttmEPS'))
+                
+                # Calcola Book Value più recente
+                latest_book_value = None
                 if shares_outstanding:
                     equity_field_options = ['totalStockholdersEquity', 'totalEquity', 'stockholdersEquity']
                     equity_field = get_balance_sheet_field(balance_sheets, equity_field_options)
@@ -1540,17 +1761,22 @@ else:
                     if equity_field:
                         sorted_balance = balance_sheets.sort_index(ascending=False)
                         latest_equity = sorted_balance[equity_field].iloc[0]
-                        latest_book_value = latest_equity / shares_outstanding
-                
-                if not latest_eps:
-                    latest_eps = information.get('trailingEPS', information.get('ttmEPS'))
-                
+                        if latest_equity and latest_equity > 0:
+                            latest_book_value = latest_equity / shares_outstanding
+
+                # Fallback a Yahoo Finance
                 if not latest_book_value:
                     book_value_yahoo = information.get('bookValue')
-                    if book_value_yahoo:
+                    if book_value_yahoo and book_value_yahoo > 0:
                         latest_book_value = book_value_yahoo
-                
-                st.info(f"🔍 Dati utilizzati: EPS = {currency_symbol}{latest_eps:.2f}, Book Value = {currency_symbol}{latest_book_value:.2f}" if latest_eps and latest_book_value else "⚠️ Alcuni dati finanziari mancanti")
+
+                # FIX: Calcolo alternativo se ancora non disponibile
+                if not latest_book_value:
+                    pb_ratio = information.get('priceToBook')
+                    current_price = information.get('currentPrice', information.get('regularMarketPrice'))
+                    if pb_ratio and pb_ratio > 0 and current_price and current_price > 0:
+                        latest_book_value = current_price / pb_ratio
+                        st.caption(f" Book Value calcolato da P/B Ratio: {currency_symbol}{latest_book_value:.2f}")
                 
                 for date, row in hist_10y.iterrows():
                     close_price = row['Close']
@@ -1595,12 +1821,12 @@ else:
                             
                             avg_pe = pe_data['PE Ratio'].mean()
                             fig_pe.add_hline(y=avg_pe, line_dash="dash", line_color="orange", 
-                                           annotation_text=f"Media: {avg_pe:.1f}")
+                                        annotation_text=f"Media: {avg_pe:.1f}")
                             
                             current_pe = information.get('trailingPE')
                             if current_pe:
                                 fig_pe.add_hline(y=current_pe, line_dash="dot", line_color="red", 
-                                               annotation_text=f"PE Attuale: {current_pe:.1f}")
+                                            annotation_text=f"PE Attuale: {current_pe:.1f}")
                             
                             fig_pe.update_layout(
                                 height=400,
@@ -1644,8 +1870,47 @@ else:
                             fig_pbv.add_hline(y=avg_pbv, line_dash="dash", line_color="orange", 
                                             annotation_text=f"Media: {avg_pbv:.1f}")
                             
+                            # FIX: Calcola PBV Attuale con più fonti - PRIORITÀ MULTIPLE
+                            current_pbv = None
+                            
+                            # 1. Prova da information (Yahoo Finance / FMP principale)
                             current_pbv = information.get('priceToBook')
-                            if current_pbv:
+                            
+                            # 2. Prova da additional_metrics (FMP key metrics)
+                            if not current_pbv or current_pbv == 0:
+                                current_pbv = additional_metrics.get('pbRatio')
+                            
+                            # 3. Usa l'ultimo valore dal grafico storico come approssimazione
+                            if not current_pbv or current_pbv == 0:
+                                if not pbv_data.empty:
+                                    current_pbv = pbv_data['PBV Ratio'].iloc[-1]
+                                    st.caption("ℹ️ PBV calcolato dall'ultimo valore storico disponibile")
+                            
+                            # 4. Calcola manualmente da prezzo e book value
+                            if not current_pbv or current_pbv == 0:
+                                current_price_for_pbv = information.get('currentPrice', information.get('regularMarketPrice'))
+                                if current_price_for_pbv and current_price_for_pbv > 0:
+                                    # Cerca book value per azione
+                                    book_value = information.get('bookValue')
+                                    
+                                    # Se non disponibile, calcola da balance sheet
+                                    if not book_value and 'balance_sheets' in globals() and not balance_sheets.empty:
+                                        equity_field_options = ['totalStockholdersEquity', 'totalEquity', 'stockholdersEquity']
+                                        equity_field = get_balance_sheet_field(balance_sheets, equity_field_options)
+                                        
+                                        if equity_field and shares_outstanding and shares_outstanding > 0:
+                                            latest_balance = balance_sheets.iloc[0]
+                                            total_equity = latest_balance[equity_field]
+                                            if total_equity and total_equity > 0:
+                                                book_value = total_equity / shares_outstanding
+                                    
+                                    # Calcola PBV
+                                    if book_value and book_value > 0:
+                                        current_pbv = current_price_for_pbv / book_value
+                                        st.caption(f"ℹ️ PBV calcolato: Prezzo ({currency_symbol}{current_price_for_pbv:.2f}) / Book Value ({currency_symbol}{book_value:.2f})")
+                            
+                            # Aggiungi linea al grafico se PBV disponibile
+                            if current_pbv and current_pbv > 0:
                                 fig_pbv.add_hline(y=current_pbv, line_dash="dot", line_color="red", 
                                                 annotation_text=f"PBV Attuale: {current_pbv:.1f}")
                             
@@ -1660,10 +1925,14 @@ else:
                             fig_pbv.update_traces(line_color='#ff7f0e')
                             st.plotly_chart(fig_pbv, use_container_width=True)
                             
+                            # Statistiche PBV
                             with st.expander("Statistiche PBV Ratio"):
                                 col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
                                 with col_stat1:
-                                    st.metric("PBV Attuale", f"{current_pbv:.2f}" if current_pbv else "N/A")
+                                    if current_pbv and current_pbv > 0:
+                                        st.metric("PBV Attuale", f"{current_pbv:.2f}")
+                                    else:
+                                        st.metric("PBV Attuale", "N/A")
                                 with col_stat2:
                                     st.metric("PBV Medio", f"{avg_pbv:.2f}")
                                 with col_stat3:
@@ -1671,10 +1940,11 @@ else:
                                 with col_stat4:
                                     st.metric("PBV Max", f"{pbv_data['PBV Ratio'].max():.2f}")
                         else:
-                            st.info("Dati PBV Ratio insufficienti per il grafico storico")
-                    
+                            st.info("ℹ️ Dati PBV Ratio insufficienti per il grafico storico")
+
+                    # SEZIONE ANALISI - Anche questa va corretta
                     col_analysis1, col_analysis2 = st.columns(2)
-                    
+
                     with col_analysis1:
                         if not pe_data.empty and current_pe:
                             pe_percentile = (pe_data['PE Ratio'] < current_pe).mean() * 100
@@ -1691,23 +1961,34 @@ else:
                             - Percentile storico: **{pe_percentile:.1f}%**
                             - Il PE attuale è superiore al {pe_percentile:.1f}% dei valori storici
                             """)
-                    
+
                     with col_analysis2:
-                        if not pbv_data.empty and current_pbv:
-                            pbv_percentile = (pbv_data['PBV Ratio'] < current_pbv).mean() * 100
-                            if pbv_percentile <= 25:
-                                pbv_status = "🟢 Sottovalutato"
-                            elif pbv_percentile >= 75:
-                                pbv_status = "🔴 Sopravvalutato"
+                        if not pbv_data.empty:
+                            # FIX: Usa lo stesso current_pbv calcolato sopra
+                            if current_pbv and current_pbv > 0:
+                                pbv_percentile = (pbv_data['PBV Ratio'] < current_pbv).mean() * 100
+                                if pbv_percentile <= 25:
+                                    pbv_status = "🟢 Sottovalutato"
+                                elif pbv_percentile >= 75:
+                                    pbv_status = "🔴 Sopravvalutato"
+                                else:
+                                    pbv_status = "🟡 Neutrale"
+                                
+                                st.markdown(f"""
+                                **PBV Ratio Analysis:**
+                                - Stato: {pbv_status}
+                                - Percentile storico: **{pbv_percentile:.1f}%**
+                                - Il PBV attuale è superiore al {pbv_percentile:.1f}% dei valori storici
+                                """)
                             else:
-                                pbv_status = "🟡 Neutrale"
-                            
-                            st.markdown(f"""
-                            **PBV Ratio Analysis:**
-                            - Stato: {pbv_status}
-                            - Percentile storico: **{pbv_percentile:.1f}%**
-                            - Il PBV attuale è superiore al {pbv_percentile:.1f}% dei valori storici
-                            """)
+                                # FIX: Mostra statistiche anche senza current_pbv
+                                avg_pbv = pbv_data['PBV Ratio'].mean()
+                                st.markdown(f"""
+                                **PBV Ratio Analysis:**
+                                - PBV Attuale: Non disponibile
+                                - PBV Medio storico: **{avg_pbv:.2f}**
+                                - Range: {pbv_data['PBV Ratio'].min():.2f} - {pbv_data['PBV Ratio'].max():.2f}
+                                """)
                 
                 with st.expander("ℹ️ Come interpretare i multipli di valutazione"):
                     st.markdown("""
@@ -1733,15 +2014,18 @@ else:
                 
         except Exception as e:
             st.error(f"Errore nel recupero dei dati storici: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
             st.info("Impossibile calcolare i multipli di valutazione storici")
-            # === SEZIONE CALCOLO VALORE INTRINSECO ===
+
+# === SEZIONE CALCOLO VALORE INTRINSECO ===
 st.header('Calcolo Valore Intrinseco')
 
 if not FMP_API_KEY or FMP_API_KEY == "YOUR_FMP_API_KEY_HERE":
     st.warning("⚠️ Configura la chiave API FMP nel codice per calcolare il valore intrinseco.")
 else:
     if 'period' in locals() and period != 'annual':
-        with st.spinner("📊 Caricamento dati annuali per il calcolo..."):
+        with st.spinner(" Caricamento dati annuali per il calcolo..."):
             annual_income = fetch_income_statements_fmp(symbol, FMP_API_KEY, period='annual', limit=60)
             annual_balance = fetch_balance_sheets_fmp(symbol, FMP_API_KEY, period='annual', limit=60)
             annual_cashflow = fetch_cashflow_statements_fmp(symbol, FMP_API_KEY, period='annual', limit=60)
@@ -1750,7 +2034,7 @@ else:
         annual_balance = balance_sheets
         annual_cashflow = cashflow_statements
     else:
-        with st.spinner("📊 Caricamento dati finanziari..."):
+        with st.spinner(" Caricamento dati finanziari..."):
             annual_income = fetch_income_statements_fmp(symbol, FMP_API_KEY, period='annual', limit=60)
             annual_balance = fetch_balance_sheets_fmp(symbol, FMP_API_KEY, period='annual', limit=60)
             annual_cashflow = fetch_cashflow_statements_fmp(symbol, FMP_API_KEY, period='annual', limit=60)
