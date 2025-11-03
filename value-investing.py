@@ -58,6 +58,35 @@ GOOGLE_SHEET_GID = os.getenv("MY_GOOGLES_GID")
 
 # ===== FUNZIONI DI RECUPERO DATI =====
 @st.cache_data(ttl=3600)
+def search_ticker_score(ticker):
+    """Cerca il ticker nel Google Sheet e restituisce il punteggio dalla colonna G"""
+    try:
+        csv_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/export?format=csv&gid={GOOGLE_SHEET_GID}"
+        df = pd.read_csv(csv_url)
+        
+        if len(df.columns) < 7:
+            return None
+        
+        ticker_column = df.columns[2]
+        score_column = df.columns[6]
+        ticker_upper = ticker.upper()
+        
+        match = df[df[ticker_column].str.upper() == ticker_upper]
+        
+        if not match.empty:
+            score = match[score_column].iloc[0]
+            try:
+                return float(score)
+            except (ValueError, TypeError):
+                return None
+        
+        return None
+        
+    except Exception as e:
+        st.warning(f"Impossibile recuperare dati dal Google Sheet: {str(e)}")
+        return None
+        
+@st.cache_data(ttl=3600)
 def fetch_stock_info_fmp(symbol, api_key):
     """Recupera informazioni dal profilo FMP + quote real-time"""
     try:
