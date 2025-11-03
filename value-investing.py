@@ -1086,42 +1086,6 @@ with col_chart:
     else:
         st.warning("⚠️ Dati dei prezzi storici non disponibili.")
 
-# SCORE DIRAMCO # ====================================================================
-
-st.write("")  # Spazio di separazione
-
-# Ricerca score nel Google Sheet
-ticker_score = search_ticker_score(symbol)
-
-if ticker_score is not None:
-    # Determina il colore in base allo score
-    if ticker_score >= 9:
-        score_color = "#00b300"  # Verde molto scuro
-        score_emoji = "🟢🟢"
-        score_label = "Eccellente"
-    elif ticker_score >= 8:
-        score_color = "#00e600"  # Verde
-        score_emoji = "🟢"
-        score_label = "Molto Buono"
-    elif ticker_score >= 6:
-        score_color = "#ffd700"  # Giallo
-        score_emoji = "🟡"
-        score_label = "Accettabile"
-    else:
-        score_color = "#ff4444"  # Rosso
-        score_emoji = "🔴"
-        score_label = "Cautela"
-    
-    st.markdown(f"""
-    <div style='padding: 20px; border-radius: 10px; background-color: {score_color}20; border: 2px solid {score_color}; margin-top: 20px; margin-bottom: 20px;'>
-        <h2 style='margin: 0; color: {score_color}; text-align: center;'>{score_emoji} Score DIRAMCO: {ticker_score:.1f}/10</h2>
-        <p style='margin: 10px 0 0 0; font-size: 1.1em; text-align: center;'>Valutazione qualità Analisi Fondamentale. Indica indirettamente il MOAT del Titolo - {score_label}</p>
-    </div>
-    """, unsafe_allow_html=True)
-else:
-    st.info("ℹ️ **Score DIRAMCO:** Non disponibile al momento")
-
-
 # === SEZIONE INDICATORI FINANZIARI DETTAGLIATI ===
 st.header('Indicatori Finanziari Dettagliati')
 
@@ -1601,6 +1565,39 @@ def calculate_graham_value(info, annual_financials, currency_symbol, earnings_gr
         st.error(traceback.format_exc())
         return None
 
+# SCORE DIRAMCO # ====================================================================
+st.write("")  # Spazio di separazione
+
+# Ricerca score nel Google Sheet
+ticker_score = search_ticker_score(symbol)
+
+if ticker_score is not None:
+    # Determina il colore in base allo score
+    if ticker_score >= 9:
+        score_color = "#00b300"  # Verde molto scuro
+        score_emoji = "🟢🟢"
+        score_label = "Eccellente"
+    elif ticker_score >= 8:
+        score_color = "#00e600"  # Verde
+        score_emoji = "🟢"
+        score_label = "Molto Buono"
+    elif ticker_score >= 6:
+        score_color = "#ffd700"  # Giallo
+        score_emoji = "🟡"
+        score_label = "Accettabile"
+    else:
+        score_color = "#ff4444"  # Rosso
+        score_emoji = "🔴"
+        score_label = "Cautela"
+    
+    st.markdown(f"""
+    <div style='padding: 20px; border-radius: 10px; background-color: {score_color}20; border: 2px solid {score_color}; margin-top: 20px; margin-bottom: 20px;'>
+        <h2 style='margin: 0; color: {score_color}; text-align: center;'>{score_emoji} Score DIRAMCO: {ticker_score:.1f}/10</h2>
+        <p style='margin: 10px 0 0 0; font-size: 1.1em; text-align: center;'>Valutazione qualità Analisi Fondamentale. Indica indirettamente il MOAT del Titolo - {score_label}</p>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.info("ℹ️ **Score DIRAMCO:** Non disponibile al momento")
 
 # === SEZIONE ANALISI NEWS ===
 if PERPLEXITY_API_KEY and PERPLEXITY_API_KEY != "YOUR_PERPLEXITY_API_KEY_HERE":
