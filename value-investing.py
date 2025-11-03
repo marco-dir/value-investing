@@ -143,7 +143,7 @@ def detect_query_language(query):
         'generali', 'fiat', 'stellantis', 'leonardo', 'poste',
         'saipem', 'tenaris', 'prysmian', 'moncler', 'campari',
         'amplifon', 'buzzi', 'diasorin', 'inwit', 'italgas',
-        'recordati', 'snam', 'terna', 'pirelli', 'atlantia'
+        'recordati', 'snam', 'terna', 'pirelli', 'fineco'
     ]
     
     # Liste di aziende USA/globali comuni in inglese
