@@ -777,7 +777,7 @@ with col_ticker:
     symbol = st.text_input(
         'Inserisci il Ticker o Nome del Titolo Azionario', 
         'AAPL', 
-        help="Es. AAPL, Microsoft, Intesa, Unicredit, MC.PA, SAP.DE",
+        help="Es. AAPL, GOOGL, Microsoft, Intesa, Unicredit, G.MI, MC.PA, SAP.DE",
         placeholder="Inserisci ticker o nome azienda..."
     )
 
