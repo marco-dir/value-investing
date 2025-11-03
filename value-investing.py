@@ -58,35 +58,6 @@ GOOGLE_SHEET_GID = os.getenv("MY_GOOGLES_GID")
 
 # ===== FUNZIONI DI RECUPERO DATI =====
 @st.cache_data(ttl=3600)
-def search_ticker_score(ticker):
-    """Cerca il ticker nel Google Sheet e restituisce il punteggio dalla colonna G"""
-    try:
-        csv_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/export?format=csv&gid={GOOGLE_SHEET_GID}"
-        df = pd.read_csv(csv_url)
-        
-        if len(df.columns) < 7:
-            return None
-        
-        ticker_column = df.columns[2]
-        score_column = df.columns[6]
-        ticker_upper = ticker.upper()
-        
-        match = df[df[ticker_column].str.upper() == ticker_upper]
-        
-        if not match.empty:
-            score = match[score_column].iloc[0]
-            try:
-                return float(score)
-            except (ValueError, TypeError):
-                return None
-        
-        return None
-        
-    except Exception as e:
-        st.warning(f"Impossibile recuperare dati dal Google Sheet: {str(e)}")
-        return None
-
-@st.cache_data(ttl=3600)
 def fetch_stock_info_fmp(symbol, api_key):
     """Recupera informazioni dal profilo FMP + quote real-time"""
     try:
@@ -126,6 +97,338 @@ def get_currency_symbol(currency_code):
         'KRW': '₩', 'MXN': '$', 'SGD': 'S$', 'NZD': 'NZ$', 'ZAR': 'R'
     }
     return currency_symbols.get(currency_code, currency_code)
+
+def detect_query_language(query):
+    """
+    Rileva se la query è probabilmente italiana o inglese
+    per prioritizzare il mercato corretto
+    
+    Returns:
+        'IT' per italiano, 'US' per inglese
+    """
+    query_lower = query.lower().strip()
+    
+    # Liste di aziende italiane comuni (nomi completi o parziali)
+    italian_companies = [
+        'intesa', 'unicredit', 'eni', 'enel', 'ferrari', 'telecom', 
+        'generali', 'fiat', 'stellantis', 'leonardo', 'poste',
+        'saipem', 'tenaris', 'prysmian', 'moncler', 'campari',
+        'amplifon', 'buzzi', 'diasorin', 'inwit', 'italgas',
+        'recordati', 'snam', 'terna', 'pirelli', 'atlantia'
+    ]
+    
+    # Liste di aziende USA/globali comuni in inglese
+    english_companies = [
+        'apple', 'microsoft', 'google', 'amazon', 'meta', 'facebook',
+        'tesla', 'nvidia', 'netflix', 'intel', 'amd', 'oracle',
+        'cisco', 'ibm', 'dell', 'hp', 'adobe', 'salesforce',
+        'paypal', 'visa', 'mastercard', 'disney', 'nike', 'coca',
+        'pepsi', 'mcdonalds', 'starbucks', 'walmart', 'target',
+        'boeing', 'ford', 'general motors', 'exxon', 'chevron',
+        'pfizer', 'johnson', 'merck', 'abbvie', 'bristol'
+    ]
+    
+    # Check per match esatti o parziali
+    for company in italian_companies:
+        if company in query_lower:
+            return 'IT'
+    
+    for company in english_companies:
+        if company in query_lower:
+            return 'US'
+    
+    # Se non trova match, usa caratteristiche linguistiche
+    
+    # Caratteristiche tipiche italiane
+    italian_chars = ['à', 'è', 'é', 'ì', 'ò', 'ù']
+    if any(char in query_lower for char in italian_chars):
+        return 'IT'
+    
+    # Parole chiave italiane comuni
+    italian_keywords = ['spa', 's.p.a', 'srl', 'banca', 'gruppo']
+    if any(keyword in query_lower for keyword in italian_keywords):
+        return 'IT'
+    
+    # Se il ticker già specifica .MI o .BIT, è italiano
+    if '.mi' in query_lower or '.bit' in query_lower:
+        return 'IT'
+    
+    # Parole inglesi comuni nei nomi aziende USA
+    english_keywords = ['corp', 'inc', 'ltd', 'technologies', 'systems', 'group']
+    if any(keyword in query_lower for keyword in english_keywords):
+        return 'US'
+    
+    # Default: se non siamo sicuri, usiamo inglese (più comune globalmente)
+    # Questo aiuta con aziende globali come "Nestle", "Samsung", etc.
+    return 'US'
+
+@st.cache_data(ttl=3600)
+def search_ticker_by_name(query, api_key, user_country=None):
+    """
+    Cerca ticker da nome azienda con priorità geografica automatica
+    
+    Args:
+        query: Nome azienda o ticker
+        api_key: Chiave API FMP
+        user_country: Se None, rileva automaticamente dalla query
+    """
+    # Se sembra già un ticker completo, restituiscilo
+    if query.isupper() and len(query) <= 6 and '.' not in query:
+        return query
+    
+    if '.' in query and query.replace('.', '').replace('-', '').isalnum():
+        return query.upper()
+    
+    # RILEVAMENTO AUTOMATICO PAESE se non specificato
+    if user_country is None:
+        user_country = detect_query_language(query)
+    
+    # Cerca via API
+    url = f"https://financialmodelingprep.com/api/v3/search?query={query}&limit=25&apikey={api_key}"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        results = response.json()
+        
+        if not results or len(results) == 0:
+            return None
+        
+        query_lower = query.lower().strip()
+        
+        # Mercati per paese
+        country_exchanges = {
+            'IT': ['MIL', 'BIT'],           # Italia
+            'US': ['NYSE', 'NASDAQ'],       # USA
+            'FR': ['PAR'],                  # Francia
+            'DE': ['XETRA', 'F'],          # Germania
+            'GB': ['LSE'],                  # Regno Unito
+        }
+        
+        preferred_exchanges = country_exchanges.get(user_country, ['NYSE', 'NASDAQ'])
+        main_exchanges = ['NASDAQ', 'NYSE', 'MIL', 'BIT', 'XETRA', 'PAR', 'LSE', 'F']
+        
+        # PRIORITÀ 0: Match esatto ticker + mercato domestico
+        for result in results:
+            ticker = result.get('symbol', '')
+            exchange = result.get('exchangeShortName', '')
+            ticker_base = ticker.split('.')[0]
+            
+            if ticker_base.upper() == query_lower.upper() and exchange in preferred_exchanges:
+                return ticker
+        
+        # PRIORITÀ 1: Match esatto ticker + mercati principali
+        for result in results:
+            ticker = result.get('symbol', '')
+            exchange = result.get('exchangeShortName', '')
+            ticker_base = ticker.split('.')[0]
+            
+            if ticker_base.upper() == query_lower.upper() and exchange in main_exchanges:
+                return ticker
+        
+        # PRIORITÀ 2: Match esatto nome + mercato domestico
+        for result in results:
+            name = result.get('name', '').lower()
+            exchange = result.get('exchangeShortName', '')
+            
+            if query_lower == name and exchange in preferred_exchanges:
+                return result.get('symbol')
+        
+        # PRIORITÀ 3: Match esatto nome
+        for result in results:
+            name = result.get('name', '').lower()
+            if query_lower == name:
+                return result.get('symbol')
+        
+        # PRIORITÀ 4: Nome inizia con query + mercato domestico
+        for result in results:
+            name = result.get('name', '').lower()
+            exchange = result.get('exchangeShortName', '')
+            
+            if name.startswith(query_lower) and exchange in preferred_exchanges:
+                return result.get('symbol')
+        
+        # PRIORITÀ 5: Nome inizia con query
+        for result in results:
+            name = result.get('name', '').lower()
+            if name.startswith(query_lower):
+                return result.get('symbol')
+        
+        # PRIORITÀ 6: Ticker inizia + mercato domestico
+        for result in results:
+            ticker = result.get('symbol', '').upper()
+            exchange = result.get('exchangeShortName', '')
+            ticker_base = ticker.split('.')[0]
+            
+            if ticker_base.startswith(query_lower.upper()) and exchange in preferred_exchanges:
+                return result.get('symbol')
+        
+        # PRIORITÀ 7: Ticker inizia + mercati principali
+        for result in results:
+            ticker = result.get('symbol', '').upper()
+            exchange = result.get('exchangeShortName', '')
+            ticker_base = ticker.split('.')[0]
+            
+            if ticker_base.startswith(query_lower.upper()) and exchange in main_exchanges:
+                return result.get('symbol')
+        
+        # PRIORITÀ 8: Nome contiene + mercato domestico
+        for result in results:
+            name = result.get('name', '').lower()
+            exchange = result.get('exchangeShortName', '')
+            
+            if query_lower in name and exchange in preferred_exchanges:
+                return result.get('symbol')
+        
+        # PRIORITÀ 9: Primo da mercato domestico
+        for result in results:
+            exchange = result.get('exchangeShortName', '')
+            if exchange in preferred_exchanges:
+                return result.get('symbol')
+        
+        # PRIORITÀ 10: Primo da mercati principali
+        for result in results:
+            exchange = result.get('exchangeShortName', '')
+            if exchange in main_exchanges:
+                return result.get('symbol')
+        
+        # FALLBACK
+        return results[0].get('symbol')
+            
+    except Exception as e:
+        st.warning(f"Errore nella ricerca del ticker: {str(e)}")
+        return None
+
+def display_search_suggestions(query, api_key, max_results=5, user_country=None):
+    """
+    Mostra suggerimenti ordinati per rilevanza geografica automatica
+    """
+    # RILEVAMENTO AUTOMATICO PAESE se non specificato
+    if user_country is None:
+        user_country = detect_query_language(query)
+    
+    url = f"https://financialmodelingprep.com/api/v3/search?query={query}&limit=25&apikey={api_key}"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        results = response.json()
+        
+        if not results or len(results) == 0:
+            return []
+        
+        # Mercati per paese
+        country_exchanges = {
+            'IT': ['MIL', 'BIT'],
+            'US': ['NYSE', 'NASDAQ'],
+            'FR': ['PAR'],
+            'DE': ['XETRA', 'F'],
+            'GB': ['LSE']
+        }
+        
+        preferred_exchanges = country_exchanges.get(user_country, ['NYSE', 'NASDAQ'])
+        main_exchanges = ['NASDAQ', 'NYSE', 'MIL', 'BIT', 'XETRA', 'PAR', 'LSE', 'F']
+        query_lower = query.lower().strip()
+        
+        filtered_results = []
+        
+        for result in results:
+            symbol = result.get('symbol', 'N/A')
+            name = result.get('name', 'N/A')
+            exchange = result.get('exchangeShortName', '')
+            
+            if exchange not in main_exchanges:
+                continue
+            
+            # Calcola score
+            score = 0
+            name_lower = name.lower()
+            ticker_base = symbol.split('.')[0].lower()
+            
+            # Match esatto ticker
+            if ticker_base == query_lower:
+                score += 1000
+            elif name_lower == query_lower:
+                score += 900
+            elif ticker_base.startswith(query_lower):
+                score += 800
+            elif name_lower.startswith(query_lower):
+                score += 700
+            elif query_lower in name_lower:
+                score += 500
+            else:
+                score += 100
+            
+            # BONUS GEOGRAFICO
+            if exchange in preferred_exchanges:
+                score += 500
+            
+            # Bonus altri mercati
+            exchange_priority = {
+                'NYSE': 100, 
+                'NASDAQ': 100,
+                'MIL': 90,
+                'BIT': 90,
+                'XETRA': 80,
+                'F': 80,
+                'PAR': 80,
+                'LSE': 80
+            }
+            
+            if exchange not in preferred_exchanges:
+                score += exchange_priority.get(exchange, 0)
+            
+            filtered_results.append({
+                'symbol': symbol,
+                'name': name,
+                'exchange': exchange,
+                'score': score,
+                'is_domestic': exchange in preferred_exchanges
+            })
+        
+        # Ordina per score
+        filtered_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        if filtered_results:
+            # Mostra messaggio con mercato rilevato
+            market_emoji = {
+                'IT': '🇮🇹 Italia',
+                'US': '🇺🇸 USA',
+                'FR': '🇫🇷 Francia',
+                'DE': '🇩🇪 Germania',
+                'GB': '🇬🇧 UK'
+            }
+            market_label = market_emoji.get(user_country, user_country)
+            
+            st.info(f"🔍 **Risultati per '{query}'** (mercato prioritario: {market_label})")
+            
+            # Emoji bandiera per mercato rilevato
+            flag_emoji = {
+                'IT': '🇮🇹',
+                'US': '🇺🇸',
+                'FR': '🇫🇷',
+                'DE': '🇩🇪',
+                'GB': '🇬🇧'
+            }
+            
+            for idx, result in enumerate(filtered_results[:max_results], 1):
+                if result['is_domestic']:
+                    flag = flag_emoji.get(user_country, '')
+                    prefix = f"⭐{flag}"
+                elif idx == 1:
+                    prefix = "⭐"
+                else:
+                    prefix = f"{idx}."
+                
+                st.markdown(f"{prefix} **{result['symbol']}** - {result['name']} *({result['exchange']})*")
+            
+            return [r['symbol'] for r in filtered_results[:max_results]]
+        else:
+            return []
+            
+    except Exception as e:
+        st.error(f"Errore nel recupero suggerimenti: {str(e)}")
+        return []
 
 @st.cache_data
 def fetch_financial_metrics_fmp(symbol, api_key):
@@ -443,10 +746,10 @@ col_ticker, col_button = st.columns([3, 1])
 
 with col_ticker:
     symbol = st.text_input(
-        'Inserisci il Ticker del Titolo Azionario', 
+        'Inserisci il Ticker o Nome del Titolo Azionario', 
         'AAPL', 
-        help="Es. AAPL, MSFT, ISP.MI, MC.PA, SAP.DE etc.",
-        placeholder="Inserisci il simbolo del titolo..."
+        help="Es. AAPL, Microsoft, Intesa, Unicredit, MC.PA, SAP.DE",
+        placeholder="Inserisci ticker o nome azienda..."
     )
 
 with col_button:
@@ -455,14 +758,57 @@ with col_button:
     analyze_button = st.button("Analizza", type="primary", use_container_width=True)
 
 if not symbol:
-    st.info("Inserisci il ticker di un titolo per iniziare l'analisi")
+    st.info("Inserisci il ticker o nome di un titolo per iniziare l'analisi")
     st.stop()
 
+# Normalizza input (rimuovi spazi extra)
+symbol = symbol.strip()
+
+# Se l'input sembra un nome (contiene spazi o lettere minuscole), cerca il ticker
+original_input = symbol
+if ' ' in symbol or not symbol.isupper():
+    with st.spinner(f"🔍 Ricerca ticker per '{symbol}'..."):
+        found_ticker = search_ticker_by_name(symbol, FMP_API_KEY)
+        
+        if found_ticker:
+            symbol = found_ticker
+            st.success(f"✅ Trovato: **{found_ticker}**")
+        else:
+            st.warning(f"⚠️ Nessun ticker trovato per '{symbol}'. Prova con questi suggerimenti:")
+            suggestions = display_search_suggestions(original_input, FMP_API_KEY, max_results=5)
+            
+            if suggestions:
+                # Permetti selezione
+                selected = st.selectbox(
+                    "Seleziona il ticker corretto:",
+                    options=[""] + suggestions,
+                    format_func=lambda x: "Seleziona..." if x == "" else x
+                )
+                
+                if selected:
+                    symbol = selected
+                    st.rerun()
+                else:
+                    st.stop()
+            else:
+                st.error("Nessun risultato trovato. Verifica il nome o ticker inserito.")
+                st.stop()
+
+# Converti ticker in maiuscolo per sicurezza
+symbol = symbol.upper()
+
 # Recupera informazioni di base
-information = fetch_stock_info_fmp(symbol, FMP_API_KEY)
+with st.spinner(f" Caricamento dati per {symbol}..."):
+    information = fetch_stock_info_fmp(symbol, FMP_API_KEY)
 
 if not information:
-    st.error(f"❌ Nessuna informazione trovata per il ticker {symbol}. Verifica che il ticker sia corretto.")
+    st.error(f"❌ Nessuna informazione trovata per il ticker {symbol}.")
+    st.warning("Prova con uno di questi formati:")
+    st.markdown("""
+    - Ticker USA: `AAPL`, `MSFT`, `GOOGL`
+    - Ticker Europa: `ISP.MI` (Italia), `MC.PA` (Francia), `SAP.DE` (Germania)
+    - Nome: `Apple`, `Microsoft`, `Intesa Sanpaolo`
+    """)
     st.stop()
 
 # Ottieni la valuta del titolo
@@ -577,34 +923,6 @@ with col_info:
             st.metric("Beta", f"{beta:.2f}")
         else:
             st.metric("Beta", "N/A")
-
-    # SCORE DIRAMCO - SPOSTATO QUI SOTTO
-    #st.write("")  # Spazio
-    ticker_score = search_ticker_score(symbol)
-
-    if ticker_score is not None:
-        # Determina il colore in base allo score
-        if ticker_score >= 9:
-            score_color = "#00b300"  # Verde molto scuro
-            score_emoji = "🟢🟢"
-        elif ticker_score >= 8:
-            score_color = "#00e600"  # Verde
-            score_emoji = "🟢"
-        elif ticker_score >= 6:
-            score_color = "#ffd700"  # Giallo
-            score_emoji = "🟡"
-        else:
-            score_color = "#ff4444"  # Rosso
-            score_emoji = "🔴"
-        
-        st.markdown(f"""
-        <div style='padding: 15px; border-radius: 10px; background-color: {score_color}20; border: 2px solid {score_color}; margin-top: 15px;'>
-            <h3 style='margin: 0; color: {score_color};'>{score_emoji} Score DIRAMCO: {ticker_score:.1f}/10</h3>
-            <p style='margin: 5px 0 0 0; font-size: 0.9em;'>Valutazione qualità Analisi Fondamentale. Esprime indirettamente il MOAT di un titolo.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("ℹ️ **Score DIRAMCO:** Non disponibile al momento")
 
 with col_chart:
     price_history = fetch_price_history_fmp(symbol, FMP_API_KEY)
@@ -738,6 +1056,42 @@ with col_chart:
         st.caption('Visualizza Analisi Tecnica Avanzata tramite IA [qui](https://diramco.com/analisi-tecnica-ai/)')
     else:
         st.warning("⚠️ Dati dei prezzi storici non disponibili.")
+
+# SCORE DIRAMCO # ====================================================================
+
+st.write("")  # Spazio di separazione
+
+# Ricerca score nel Google Sheet
+ticker_score = search_ticker_score(symbol)
+
+if ticker_score is not None:
+    # Determina il colore in base allo score
+    if ticker_score >= 9:
+        score_color = "#00b300"  # Verde molto scuro
+        score_emoji = "🟢🟢"
+        score_label = "Eccellente"
+    elif ticker_score >= 8:
+        score_color = "#00e600"  # Verde
+        score_emoji = "🟢"
+        score_label = "Molto Buono"
+    elif ticker_score >= 6:
+        score_color = "#ffd700"  # Giallo
+        score_emoji = "🟡"
+        score_label = "Accettabile"
+    else:
+        score_color = "#ff4444"  # Rosso
+        score_emoji = "🔴"
+        score_label = "Cautela"
+    
+    st.markdown(f"""
+    <div style='padding: 20px; border-radius: 10px; background-color: {score_color}20; border: 2px solid {score_color}; margin-top: 20px; margin-bottom: 20px;'>
+        <h2 style='margin: 0; color: {score_color}; text-align: center;'>{score_emoji} Score DIRAMCO: {ticker_score:.1f}/10</h2>
+        <p style='margin: 10px 0 0 0; font-size: 1.1em; text-align: center;'>Valutazione qualità Analisi Fondamentale. Indica indirettamente il MOAT del Titolo - {score_label}</p>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.info("ℹ️ **Score DIRAMCO:** Non disponibile al momento")
+
 
 # === SEZIONE INDICATORI FINANZIARI DETTAGLIATI ===
 st.header('Indicatori Finanziari Dettagliati')
