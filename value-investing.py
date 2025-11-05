@@ -863,16 +863,26 @@ col_info, col_chart = st.columns([1, 2])
 
 with col_info:
     company_name = information.get("longName", information.get("shortName", symbol))
-    current_price = information.get("currentPrice", 0)
-    percent_change = information.get("regularMarketChangePercent", 0)
+    current_price = information.get("currentPrice")  # ← Rimosso default 0
+    percent_change = information.get("regularMarketChangePercent")
     
     st.subheader(f'{company_name}')
     st.caption(f"Valuta: {currency_code} ({currency_symbol})")
-    st.metric(
-        label="Prezzo Attuale",
-        value=f"{currency_symbol}{current_price:.2f}",
-        delta=f"{'+' if percent_change >= 0 else ''}{percent_change:.2f}%"
-    )
+    
+    # === FIX: Gestione None ===
+    if current_price is not None and current_price > 0:
+        st.metric(
+            label="Prezzo Attuale",
+            value=f"{currency_symbol}{current_price:.2f}",
+            delta=f"{'+' if percent_change and percent_change >= 0 else ''}{percent_change:.2f}%" if percent_change is not None else None
+        )
+    else:
+        st.metric(
+            label="Prezzo Attuale",
+            value="N/A",
+            help="Prezzo non disponibile dalle API"
+        )
+        st.warning("⚠️ Prezzo di mercato non disponibile per questo titolo")
 
     market_cap = information.get("marketCap", 0)
     if market_cap:
