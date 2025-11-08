@@ -139,11 +139,53 @@ def detect_query_language(query):
     
     # Liste di aziende italiane comuni (nomi completi o parziali)
     italian_companies = [
+        # FTSE MIB - Blue Chips
         'intesa', 'unicredit', 'eni', 'enel', 'ferrari', 'telecom', 
         'generali', 'fiat', 'stellantis', 'leonardo', 'poste',
         'saipem', 'tenaris', 'prysmian', 'moncler', 'campari',
         'amplifon', 'buzzi', 'diasorin', 'inwit', 'italgas',
-        'recordati', 'snam', 'terna', 'pirelli', 'fineco'
+        'recordati', 'snam', 'terna', 'pirelli', 'fineco',
+        
+        # Altri titoli FTSE MIB
+        'mediobanca', 'nexi', 'stm', 'stmicroelectronics', 'iveco',
+        'banca mediolanum', 'mediolanum', 'hera', 'a2a', 'banco bpm',
+        'bper', 'azimut', 'brunello cucinelli', 'cucinelli',
+        
+        # Mid Cap importanti
+        'banca generali', 'finecobank', 'reply', 'webuild', 'salini',
+        'atlantia', 'mondadori', 'cairo', 'rcs', 'mediaset', 'mfe',
+        'technogym', 'datalogic', 'el.en', 'elica', 'interpump',
+        'marr', 'iren', 'ascopiave', 'acea', 'edison',
+        
+        # Banche
+        'intesa sanpaolo', 'sanpaolo', 'banca popolare', 'monte paschi',
+        'mps', 'credem', 'creval', 'carige', 'popolare sondrio',
+        
+        # Utilities
+        'enel green', 'egp', 'alerion', 'falck', 'erg',
+        
+        # Lusso e Moda
+        'prada', 'salvatore ferragamo', 'ferragamo', 'tod', 'tods',
+        'golden goose', 'aeffe', 'geox', 'basic',
+        
+        # Industria
+        'cnh', 'cnh industrial', 'fincantieri', 'danieli', 'interpump',
+        'marelli', 'brembo', 'sogefi', 'sabaf',
+        
+        # Tech e Telecom
+        'engineering', 'esprinet', 'digital value', 'retelit',
+        'reti', 'sparkle', 'inwit', 'cellnex',
+        
+        # Real Estate
+        'coima', 'covivio', 'igd siiq', 'beni stabili',
+        
+        # Food & Beverage
+        'davide campari', 'autogrill', 'deoleo', 'valsoia',
+        'newlat', 'la doria', 'orsero',
+        
+        # Farmaceutico e Healthcare
+        'diasorin', 'recordati', 'amplifon', 'molmed',
+        'el.en', 'philogen', 'newron', 'alfasigma'
     ]
     
     # Liste di aziende USA/globali comuni in inglese
@@ -854,7 +896,39 @@ if FMP_API_KEY and FMP_API_KEY != "YOUR_FMP_API_KEY_HERE":
     additional_metrics = fetch_financial_metrics_fmp(symbol, FMP_API_KEY)
     company_profile = fetch_company_profile_fmp(symbol, FMP_API_KEY)
     financial_ratios = fetch_financial_ratios_fmp(symbol, FMP_API_KEY)
-    income_statements_preview = fetch_income_statements_fmp(symbol, FMP_API_KEY, period='annual', limit=1)
+    income_statements_preview = fetch_income_statements_fmp(symbol, FMP_API_KEY, period='annual', limit=5)
+
+# === CALCOLA EPS GROWTH UNA SOLA VOLTA (usato sia in Indicatori Chiave che per PEG Ratio) ===
+eps_growth_percentage = None
+
+# 1. Prova da income statements (più accurato - confronto YoY)
+if not income_statements_preview.empty and len(income_statements_preview) >= 2:
+    try:
+        latest_eps = income_statements_preview.iloc[0].get('eps', income_statements_preview.iloc[0].get('epsdiluted', 0))
+        previous_eps = income_statements_preview.iloc[1].get('eps', income_statements_preview.iloc[1].get('epsdiluted', 0))
+        
+        if latest_eps and previous_eps and previous_eps != 0:
+            eps_growth_percentage = ((latest_eps - previous_eps) / abs(previous_eps)) * 100
+    except:
+        pass
+
+# 2. Fallback: prova da information
+if eps_growth_percentage is None:
+    eps_growth_decimal = information.get("earningsGrowth")
+    if eps_growth_decimal and eps_growth_decimal != 0:
+        eps_growth_percentage = eps_growth_decimal * 100 if abs(eps_growth_decimal) < 1 else eps_growth_decimal
+
+# 3. Fallback: prova da additional_metrics
+if eps_growth_percentage is None:
+    earnings_yield = additional_metrics.get("earningsYield")
+    if earnings_yield and earnings_yield != 0:
+        eps_growth_percentage = earnings_yield if abs(earnings_yield) > 1 else earnings_yield * 100
+
+# 4. Fallback finale: prova da company_profile
+if eps_growth_percentage is None:
+    eps_growth_decimal = company_profile.get("defaultEPS")
+    if eps_growth_decimal and eps_growth_decimal != 0:
+        eps_growth_percentage = eps_growth_decimal * 100 if abs(eps_growth_decimal) < 1 else eps_growth_decimal
 
 # === SEZIONE INFORMAZIONI TITOLO E GRAFICO ===
 st.header('Panoramica Titolo')
@@ -958,11 +1032,11 @@ with col_info:
             else:
                 st.metric("P/B Ratio", "N/A")
         
-        beta = information.get("beta", company_profile.get("beta", 0))
-        if beta:
-            st.metric("Beta", f"{beta:.2f}")
+        # EPS Growth - usa la variabile già calcolata globalmente
+        if eps_growth_percentage is not None and eps_growth_percentage != 0:
+            st.metric("EPS Growth", f"{eps_growth_percentage:+.2f}%")
         else:
-            st.metric("Beta", "N/A")
+            st.metric("EPS Growth", "N/A")
 
 with col_chart:
     price_history = fetch_price_history_fmp(symbol, FMP_API_KEY)
@@ -1112,18 +1186,10 @@ price_to_sales = additional_metrics.get("priceToSalesRatio")
 if not price_to_sales:
     price_to_sales = information.get("priceToSalesTrailing12Months", 0)
 
-# Calcola PEG Ratio
+# === CALCOLA PEG RATIO usando eps_growth_percentage già calcolato ===
 peg_ratio = None
-earnings_quarterly_growth = additional_metrics.get("earningsYield")
-if pe_ratio and earnings_quarterly_growth and earnings_quarterly_growth > 0:
-    eps_growth = earnings_quarterly_growth
-    if eps_growth > 1:
-        eps_growth = eps_growth / 100
-    peg_ratio = pe_ratio / (eps_growth * 100)
-else:
-    eps_growth = information.get("earningsGrowth", 0)
-    if pe_ratio and eps_growth and eps_growth > 0:
-        peg_ratio = pe_ratio / (eps_growth * 100)
+if pe_ratio and eps_growth_percentage and eps_growth_percentage > 0:
+    peg_ratio = pe_ratio / eps_growth_percentage
 
 # ROE, ROA, ROIC da FMP
 roe = additional_metrics.get("roe")
@@ -1237,7 +1303,7 @@ with col_table1:
         ("P/E Ratio", pe_value, pe_is_green, "Prezzo/Utili - Quanto si paga per 1 unità di utili"),
         ("P/B Ratio", pb_value, pb_is_green, "Prezzo/Valore Contabile - Rapporto con patrimonio netto"),
         ("P/S Ratio", ps_value, ps_is_green, "Prezzo/Ricavi - Valutazione basata sui ricavi"),
-        ("PEG Ratio", peg_value, peg_is_green, "P/E aggiustato per crescita - Ideale tra 0.5-2.0")
+        ("PEG Ratio", peg_value, peg_is_green, "P/E / EPS Growth - Valuta P/E rispetto alla crescita utili (ideale < 1)")
     ]
     
     for indicator, value, is_green, tooltip in indicators_price:
@@ -1328,34 +1394,6 @@ with col_margin2:
                 st.write(f"{value:.2f}")
             else:
                 st.write("❌ N/A")
-
-# === LEGENDA ===
-with st.expander("Come interpretare questi indicatori", expanded=False):
-    st.markdown("""
-    ### Indicatori di Valutazione
-    - **P/E Ratio < 15**: Potenzialmente sottovalutato ✅
-    - **P/B Ratio < 1.5**: Prezzo ragionevole rispetto al patrimonio ✅  
-    - **P/S Ratio < 2**: Valutazione conservativa sui ricavi ✅
-    - **PEG Ratio 0.5-2.0**: Crescita giustifica la valutazione ✅
-    
-    ### Indicatori di Performance  
-    - **ROE > 15%**: Ottima redditività del capitale ✅
-    - **ROA > 10%**: Efficiente utilizzo degli asset ✅
-    - **ROIC > 10%**: Buon ritorno sul capitale investito ✅
-    - **Debt/Equity < 100%**: Leva finanziaria controllata ✅
-    
-    ### Margini e Liquidità
-    - **Margini > 10%**: Buona redditività operativa ✅
-    - **Current Ratio > 1.5**: Buona liquidità a breve termine ✅
-    - **Quick Ratio > 1.0**: Liquidità immediata sufficiente ✅
-    - **Beta 0.5-1.5**: Volatilità in linea con il mercato ✅
-    
-    ### Score DIRAMCO
-    - **≥ 9**: Qualità eccellente 🟢🟢
-    - **≥ 8**: Qualità molto buona 🟢
-    - **≥ 6**: Qualità accettabile 🟡
-    - **< 6**: Cautela necessaria 🔴
-    """)
 
 def calculate_dcf_value(info, annual_financials, annual_cashflow, annual_balance_sheet, currency_symbol):
     """Calcolo valore intrinseco con metodo DCF"""
@@ -1608,6 +1646,34 @@ if ticker_score is not None:
     """, unsafe_allow_html=True)
 else:
     st.info("ℹ️ **Score DIRAMCO:** Non disponibile al momento")
+
+# === LEGENDA ===
+with st.expander("Come interpretare questi indicatori", expanded=False):
+    st.markdown("""
+    ### Indicatori di Valutazione
+    - **P/E Ratio < 15**: Potenzialmente sottovalutato ✅
+    - **P/B Ratio < 1.5**: Prezzo ragionevole rispetto al patrimonio ✅  
+    - **P/S Ratio < 2**: Valutazione conservativa sui ricavi ✅
+    - **PEG Ratio 0.5-2.0**: Crescita giustifica la valutazione ✅
+    
+    ### Indicatori di Performance  
+    - **ROE > 15%**: Ottima redditività del capitale ✅
+    - **ROA > 10%**: Efficiente utilizzo degli asset ✅
+    - **ROIC > 10%**: Buon ritorno sul capitale investito ✅
+    - **Debt/Equity < 100%**: Leva finanziaria controllata ✅
+    
+    ### Margini e Liquidità
+    - **Margini > 10%**: Buona redditività operativa ✅
+    - **Current Ratio > 1.5**: Buona liquidità a breve termine ✅
+    - **Quick Ratio > 1.0**: Liquidità immediata sufficiente ✅
+    - **Beta 0.5-1.5**: Volatilità in linea con il mercato ✅
+    
+    ### Score DIRAMCO
+    - **≥ 9**: Qualità eccellente 🟢🟢
+    - **≥ 8**: Qualità molto buona 🟢
+    - **≥ 6**: Qualità accettabile 🟡
+    - **< 6**: Cautela necessaria 🔴
+    """)
 
 # === SEZIONE ANALISI NEWS ===
 if PERPLEXITY_API_KEY and PERPLEXITY_API_KEY != "YOUR_PERPLEXITY_API_KEY_HERE":
