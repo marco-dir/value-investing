@@ -863,13 +863,13 @@ col_info, col_chart = st.columns([1, 2])
 
 with col_info:
     company_name = information.get("longName", information.get("shortName", symbol))
-    current_price = information.get("currentPrice")  # ← Rimosso default 0
+    current_price = information.get("currentPrice")
     percent_change = information.get("regularMarketChangePercent")
     
     st.subheader(f'{company_name}')
     st.caption(f"Valuta: {currency_code} ({currency_symbol})")
     
-    # === FIX: Gestione None ===
+    # === Gestione None per prezzo ===
     if current_price is not None and current_price > 0:
         st.metric(
             label="Prezzo Attuale",
@@ -899,13 +899,14 @@ with col_info:
     col_ind1, col_ind2 = st.columns(2)
 
     with col_ind1:
+        # P/E da quote endpoint (corretto)
         pe_ratio = information.get("trailingPE", additional_metrics.get("peRatio", 0))
         if pe_ratio:
             st.metric("P/E Ratio", f"{pe_ratio:.2f}")
         else:
             st.metric("P/E Ratio", "N/A")
         
-        # FIX: Rendimento Dividendo - Prova più fonti
+        # Rendimento Dividendo - Prova più fonti
         dividend_yield = None
         
         # 1. Prova da informazioni base
@@ -939,7 +940,7 @@ with col_info:
                     st.metric("Rendimento Dividendo", "N/A")
 
     with col_ind2:
-        # FIX: P/B Ratio
+        # P/B Ratio
         pb_ratio = information.get("priceToBook")
         if not pb_ratio:
             pb_ratio = additional_metrics.get("pbRatio")
@@ -1099,10 +1100,9 @@ with col_chart:
 # === SEZIONE INDICATORI FINANZIARI DETTAGLIATI ===
 st.header('Indicatori Finanziari Dettagliati')
 
-# Recupera dati da FMP prioritariamente
-pe_ratio = additional_metrics.get("peRatio")
-if not pe_ratio:
-    pe_ratio = information.get("trailingPE", 0)
+# === USA LA STESSA LOGICA DEGLI INDICATORI CHIAVE ===
+# Prima da information (quote endpoint), poi da additional_metrics come fallback
+pe_ratio = information.get("trailingPE", additional_metrics.get("peRatio", 0))
 
 pb_ratio = additional_metrics.get("pbRatio")
 if not pb_ratio:
@@ -1132,7 +1132,7 @@ if roe and roe > 1:
 if not roe:
     roe = information.get("returnOnEquity", 0)
 
-# FIX ROA - Prova più fonti
+# ROA - Prova più fonti
 roa = additional_metrics.get("returnOnAssets")
 if roa and roa > 1:
     roa = roa / 100
@@ -1205,7 +1205,7 @@ current_ratio = additional_metrics.get("currentRatio")
 if not current_ratio:
     current_ratio = information.get("currentRatio", 0)
 
-# FIX Quick Ratio - Prova più fonti
+# Quick Ratio - Prova più fonti
 quick_ratio = financial_ratios.get("quickRatio")
 if not quick_ratio or quick_ratio == 0:
     quick_ratio = additional_metrics.get("quickRatio")
