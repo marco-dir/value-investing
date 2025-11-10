@@ -165,7 +165,7 @@ def detect_query_language(query):
         'enel green', 'egp', 'alerion', 'falck', 'erg',
         
         # Lusso e Moda
-        'prada', 'salvatore ferragamo', 'ferragamo', 'tod', 'tods',
+        'prada', 'salvatore ferragamo', 'ferragamo', 'brembo', 'tods',
         'golden goose', 'aeffe', 'geox', 'basic',
         
         # Industria
@@ -190,14 +190,119 @@ def detect_query_language(query):
     
     # Liste di aziende USA/globali comuni in inglese
     english_companies = [
-        'apple', 'microsoft', 'google', 'amazon', 'meta', 'facebook',
+        # Mega Cap Tech (FAANG+)
+        'apple', 'microsoft', 'google', 'alphabet', 'amazon', 'meta', 'facebook',
         'tesla', 'nvidia', 'netflix', 'intel', 'amd', 'oracle',
-        'cisco', 'ibm', 'dell', 'hp', 'adobe', 'salesforce',
-        'paypal', 'visa', 'mastercard', 'disney', 'nike', 'coca',
-        'pepsi', 'mcdonalds', 'starbucks', 'walmart', 'target',
-        'boeing', 'ford', 'general motors', 'exxon', 'chevron',
-        'pfizer', 'johnson', 'merck', 'abbvie', 'bristol'
+        
+        # Tech Giants & Software
+        'cisco', 'ibm', 'dell', 'hp', 'hewlett packard', 'adobe', 'salesforce',
+        'servicenow', 'workday', 'snowflake', 'datadog', 'mongodb',
+        'zoom', 'slack', 'atlassian', 'splunk', 'twilio', 'okta',
+        'palantir', 'crowdstrike', 'cloudflare', 'docusign',
+        'autodesk', 'synopsys', 'cadence', 'ansys', 'intuit',
+        
+        # Semiconductors
+        'qualcomm', 'broadcom', 'texas instruments', 'micron',
+        'applied materials', 'lam research', 'kla', 'asml',
+        'marvell', 'analog devices', 'microchip', 'nxp', 'on semiconductor',
+        
+        # E-commerce & Digital
+        'shopify', 'ebay', 'etsy', 'wayfair', 'chewy', 'carvana',
+        'doordash', 'uber', 'lyft', 'airbnb', 'booking', 'expedia',
+        
+        # Fintech & Payments
+        'paypal', 'square', 'block', 'visa', 'mastercard', 'american express',
+        'discover', 'affirm', 'sofi', 'robinhood', 'coinbase',
+        
+        # Social Media & Entertainment
+        'snap', 'snapchat', 'pinterest', 'twitter', 'reddit',
+        'spotify', 'roblox', 'unity', 'electronic arts', 'activision',
+        'take-two', 'zynga', 'warner bros', 'paramount', 'comcast',
+        
+        # Streaming & Media
+        'disney', 'roku', 'fubo', 'iheartmedia', 'sirius xm',
+        
+        # Retail & Consumer
+        'walmart', 'target', 'costco', 'home depot', 'lowes',
+        'tjx', 'ross', 'dollar general', 'dollar tree', 'best buy',
+        'macys', 'nordstrom', 'kohls', 'gap', 'foot locker',
+        
+        # Food & Beverage
+        'coca cola', 'pepsi', 'pepsico', 'mondelez', 'kraft heinz',
+        'general mills', 'kellogg', 'conagra', 'tyson', 'hormel',
+        'campbell', 'hershey', 'monster beverage', 'celsius',
+        
+        # Restaurants
+        'mcdonalds', 'starbucks', 'chipotle', 'dominos', 'yum brands',
+        'restaurant brands', 'dunkin', 'wendys', 'shake shack',
+        'wingstop', 'dutch bros', 'panera',
+        
+        # Apparel & Footwear
+        'nike', 'lululemon', 'under armour', 'vf corp', 'ralph lauren',
+        'pvh', 'tapestry', 'capri', 'skechers', 'crocs', 'deckers',
+        
+        # Automotive
+        'ford', 'general motors', 'gm', 'stellantis', 'rivian', 'lucid',
+        'nikola', 'fisker', 'lordstown', 'goodyear', 'lear', 'aptiv',
+        
+        # Energy
+        'exxon', 'exxonmobil', 'chevron', 'conocophillips', 'occidental',
+        'marathon', 'valero', 'phillips 66', 'schlumberger', 'halliburton',
+        'baker hughes', 'devon energy', 'pioneer', 'diamondback',
+        
+        # Aerospace & Defense
+        'boeing', 'lockheed martin', 'raytheon', 'northrop grumman',
+        'general dynamics', 'l3harris', 'textron', 'huntington ingalls',
+        
+        # Pharma & Biotech
+        'pfizer', 'johnson', 'johnson & johnson', 'merck', 'abbvie', 'bristol',
+        'bristol myers', 'eli lilly', 'lilly', 'amgen', 'gilead',
+        'regeneron', 'vertex', 'biogen', 'moderna', 'biontech',
+        'illumina', 'seagen', 'biomarin', 'incyte', 'alexion',
+        
+        # Medical Devices
+        'medtronic', 'abbott', 'dexcom', 'intuitive surgical', 'stryker',
+        'boston scientific', 'edwards lifesciences', 'zimmer biomet',
+        'baxter', 'becton dickinson', 'bd', 'align technology',
+        
+        # Healthcare Services
+        'unitedhealth', 'cvs', 'cigna', 'humana', 'elevance',
+        'anthem', 'centene', 'quest diagnostics', 'labcorp',
+        
+        # Banks & Financial Services
+        'jpmorgan', 'bank of america', 'wells fargo', 'citigroup',
+        'goldman sachs', 'morgan stanley', 'charles schwab', 'blackrock',
+        'capital one', 'pnc', 'us bancorp', 'truist', 'citizens',
+        
+        # Insurance
+        'berkshire hathaway', 'progressive', 'allstate', 'travelers',
+        'chubb', 'metlife', 'prudential', 'aflac', 'lincoln national',
+        
+        # Real Estate
+        'american tower', 'prologis', 'crown castle', 'equinix',
+        'public storage', 'realty income', 'simon property', 'welltower',
+        
+        # Industrial & Manufacturing
+        'caterpillar', 'deere', 'john deere', '3m', 'honeywell',
+        'ge', 'general electric', 'emerson', 'parker hannifin',
+        'eaton', 'rockwell', 'illinois tool', 'stanley black',
+        
+        # Transportation & Logistics
+        'ups', 'fedex', 'union pacific', 'norfolk southern', 'csx',
+        'jb hunt', 'old dominion', 'schneider', 'landstar', 'xpo',
+        
+        # Materials & Chemicals
+        'dow', 'dupont', 'linde', 'air products', 'sherwin williams',
+        'ppg', 'nucor', 'freeport', 'newmont', 'mosaic',
+        
+        # Utilities
+        'nextera', 'duke energy', 'southern company', 'dominion',
+        'american electric', 'exelon', 'sempra', 'peg', 'xcel energy',
+        
+        # Telecom
+        'verizon', 'att', 't-mobile', 'lumen', 'frontier'
     ]
+    
     
     # Check per match esatti o parziali
     for company in italian_companies:
